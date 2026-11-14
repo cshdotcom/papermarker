@@ -191,19 +191,23 @@ export function CornerEditor({ file, index, total, onDone, onCancel }: Props) {
         </Button>
       </div>
 
-      {/* 编辑区 */}
+      {/* 编辑区：容器限定尺寸，aspect-ratio 包裹器保证画布完整可见且角点永不溢出 */}
       <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden px-3">
         <div
           ref={wrapRef}
           className="relative max-h-full max-w-full touch-none select-none"
+          style={{
+            aspectRatio: size ? `${size.w} / ${size.h}` : undefined,
+            width: size && size.w >= size.h ? '100%' : undefined,
+            height: size && size.w < size.h ? '100%' : undefined,
+          }}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp}
         >
           <canvas
             ref={imgRef}
-            className="block max-h-[60vh] w-auto max-w-full rounded"
-            style={{ objectFit: 'contain' }}
+            className="absolute inset-0 block h-full w-full rounded"
           />
           {corners && (
             <>
@@ -212,8 +216,8 @@ export function CornerEditor({ file, index, total, onDone, onCancel }: Props) {
                   points={corners.map((c) => `${(c.x / (size?.w || 1)) * 100}%,${(c.y / (size?.h || 1)) * 100}%`).join(' ')}
                   fill="rgba(16,185,129,0.12)"
                   stroke="#10b981"
-                  strokeWidth="2"
-                  strokeDasharray="8 4"
+                  strokeWidth="3"
+                  strokeDasharray="10 5"
                 />
               </svg>
               {corners.map((c, i) => (

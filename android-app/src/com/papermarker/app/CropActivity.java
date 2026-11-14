@@ -153,6 +153,7 @@ public class CropActivity extends Activity {
         bitmap = rotated;
         PointF[] newPts = new PointF[4];
         for (int i = 0; i < 4; i++) newPts[i] = BitmapUtil.rotatePoint(old[i], oldW, oldH);
+        // setBitmap 内部会先 normalizeQuad：clamp 越界点 + 排序 + 面积校验，失败则回退默认四角
         cropView.setBitmap(bitmap, newPts);
     }
 

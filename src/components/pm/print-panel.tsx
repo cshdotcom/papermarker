@@ -1,8 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { Printer, FileText, Loader2, ExternalLink, FileCheck, FileQuestion, BookOpen, Layers } from 'lucide-react'
-import { api, fileUrl, type TaskDetail } from '@/lib/pm'
+import { Printer, FileText, Loader2, ExternalLink, FileCheck, FileQuestion, BookOpen, Layers, RefreshCw } from 'lucide-react'
+import { api, fileUrl, type TaskDetail, type MarkLayers } from '@/lib/pm'
+import { usePm } from '@/lib/pm-store'
 import { useToast } from '@/hooks/use-toast'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -20,10 +21,23 @@ const SUB_LABEL: Record<SubType, string> = {
   parse: '解析 PDF',
 }
 
+/** 可调图层（标记层/批注共用，错因+答案默认开） */
+const LAYER_ITEMS: { key: keyof MarkLayers; label: string; hint?: string }[] = [
+  { key: 'marks', label: '判分标记 √×⍻' },
+  { key: 'scores', label: '得分' },
+  { key: 'answers', label: '答案回填' },
+  { key: 'reason', label: '错因（错在哪步）' },
+  { key: 'solution', label: '完整解析' },
+  { key: 'boxes', label: '题框' },
+  { key: 'banner', label: '顶部分数条' },
+]
+
 export function PrintPanel({ task }: { task: TaskDetail }) {
   const [duplex, setDuplex] = useState(false)
   const [copies, setCopies] = useState(1)
   const [busy, setBusy] = useState<SubType | null>(null)
+  const [regenerating, setRegenerating] = useState(false)
+  const { layers, setLayers, toggleLayer } = usePm()
   const { toast } = useToast()
 
   const fileIds: Record<SubType, string | undefined> = {
@@ -34,6 +48,19 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
   }
 
   const openPdf = (id: string) => window.open(fileUrl(id), '_blank')
+
+  /** 按当前图层重新生成四类 PDF */
+  const regenerate = async () => {
+    setRegenerating(true)
+    try {
+      await api.generatePdf(task.id, layers)
+      toast({ title: 'PDF 已按当前图层重新生成' })
+    } catch (e: any) {
+      toast({ title: '生成失败', description: e.message, variant: 'destructive' })
+    } finally {
+      setRegenerating(false)
+    }
+  }
 
   const doPrint = async (sub: SubType) => {
     setBusy(sub)
@@ -48,6 +75,7 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
         subType: sub,
         duplex,
         copies,
+        layers,
       }).catch((e) => e)
 
       // 服务端 IPP 失败 → 返回 fallbackPdfFileId，走浏览器打印
@@ -69,7 +97,6 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
         toast({ title: `${SUB_LABEL[sub]} 打印成功`, description: r.msg })
       } else {
         toast({ title: '打印失败', description: r?.msg || '未知错误', variant: 'destructive' })
-        // 兜底打开 PDF
         openPdf(fid)
       }
     } finally {
@@ -86,6 +113,54 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* 标记内容图层（错因/答案默认开，可调整） */}
+        <div className="rounded-lg border p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-xs font-medium">
+              <Layers className="h-3.5 w-3.5 text-emerald-600" />
+              打印内容图层
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={regenerate}
+              disabled={regenerating}
+              className="h-7 px-2 text-[11px]"
+            >
+              {regenerating ? (
+                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-1 h-3 w-3" />
+              )}
+              重新生成 PDF
+            </Button>
+          </div>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+            {LAYER_ITEMS.map((it) => (
+              <label
+                key={it.key}
+                className="flex cursor-pointer items-center justify-between gap-2 rounded px-1 py-0.5 text-[11px] transition hover:bg-muted/60"
+                onClick={(e) => {
+                  e.preventDefault()
+                  toggleLayer(it.key)
+                }}
+              >
+                <span className={layers[it.key] ? 'text-foreground' : 'text-muted-foreground'}>
+                  {it.label}
+                </span>
+                <Switch
+                  checked={layers[it.key]}
+                  onCheckedChange={() => toggleLayer(it.key)}
+                  className="scale-90"
+                />
+              </label>
+            ))}
+          </div>
+          <p className="mt-2 text-[10px] text-muted-foreground">
+            错因与答案默认开启；打印/重新生成时按当前开关生效（练习名 · 学生得分 · 打印日期在分数条中）。
+          </p>
+        </div>
+
         <div className="grid grid-cols-2 gap-3">
           <div className="flex items-center justify-between rounded-lg border p-2.5">
             <Label htmlFor="duplex" className="text-xs">双面打印</Label>
@@ -127,7 +202,7 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
             className="bg-amber-600 text-white hover:bg-amber-700"
           >
             {busy === 'marks' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Layers className="mr-2 h-4 w-4" />}
-            打印纯标记层（仅√×，无题目无图）
+            打印纯标记层（含答案/错因，无题目无图）
           </Button>
           <div className="grid grid-cols-2 gap-2">
             <Button onClick={() => doPrint('answer')} disabled={busy !== null} variant="outline">

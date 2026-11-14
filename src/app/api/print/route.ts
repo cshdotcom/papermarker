@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
   if (!auth.ok) return auth.resp
   const uid = auth.uid
 
-  const { taskId, subType, ippUrl, duplex, copies, fallback } = await req.json()
+  const { taskId, subType, ippUrl, duplex, copies, fallback, layers } = await req.json()
 
   const task = await db.task.findFirst({ where: { id: taskId, userId: uid } })
   if (!task) return NextResponse.json({ code: 404, msg: '任务不存在' }, { status: 404 })
@@ -89,6 +89,8 @@ export async function POST(req: NextRequest) {
         for (let c = 0; c < useCopies; c++) {
           const pages = await renderAnnotatedJpegs(pageImages, annotations, {
             withImage: subType === 'mark',
+            layers,
+            meta: { paperName: task.paperName, studentName: task.studentName },
           })
           jpegs.push(...pages.map((p) => p.jpeg))
         }
@@ -101,7 +103,7 @@ export async function POST(req: NextRequest) {
     // answer / parse（纯文字 PDF）：直连模式不支持 → 降级浏览器打印
     let fileRow = await db.file.findFirst({ where: { taskId, fileType } })
     if (!fileRow) {
-      await generateTaskPdfs(taskId)
+      await generateTaskPdfs(taskId, layers)
       fileRow = await db.file.findFirst({ where: { taskId, fileType } })
     }
     if (!fileRow) return finish(false, 'PDF 文件不存在，请先生成', {})
@@ -114,10 +116,10 @@ export async function POST(req: NextRequest) {
   }
 
   // ---------- IPP 通用模式 ----------
-  // 确保 PDF 存在（必要时重新生成）
+  // 确保 PDF 存在（必要时按当前图层重新生成）
   let fileRow = await db.file.findFirst({ where: { taskId, fileType } })
-  if (!fileRow) {
-    await generateTaskPdfs(taskId)
+  if (!fileRow || layers) {
+    await generateTaskPdfs(taskId, layers)
     fileRow = await db.file.findFirst({ where: { taskId, fileType } })
   }
   if (!fileRow) {

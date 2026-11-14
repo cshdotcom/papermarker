@@ -79,12 +79,14 @@ public class MarksView extends View {
 
     public static Ann parseAnn(JSONObject a) {
         Ann ann = new Ann();
-        ann.id = a.optString("id");
-        ann.questionText = a.optString("questionText", "");
-        ann.judgeType = a.optString("judgeType", "correct");
-        ann.briefReason = a.optString("briefReason", null);
-        ann.answerText = a.optString("answerText", null);
-        ann.fullSolution = a.optString("fullSolution", null);
+        ann.id = safeStr(a, "id");
+        String q = safeStr(a, "questionText");
+        ann.questionText = (q == null) ? "" : q;
+        String j = safeStr(a, "judgeType");
+        ann.judgeType = (j == null || j.length() == 0) ? "correct" : j;
+        ann.briefReason = safeStr(a, "briefReason");
+        ann.answerText = safeStr(a, "answerText");
+        ann.fullSolution = safeStr(a, "fullSolution");
         ann.fullScore = a.optInt("fullScore", 0);
         ann.getScore = a.optInt("getScore", 0);
         try {
@@ -96,6 +98,14 @@ public class MarksView extends View {
         } catch (Exception ignored) {
         }
         return ann;
+    }
+
+    /** 安全读字符串：JSON 值为 null 时 optString 会返回字面量 "null"，这里统一过滤为 null */
+    private static String safeStr(JSONObject a, String key) {
+        if (a == null || a.isNull(key)) return null;
+        String v = a.optString(key, null);
+        if (v == null || v.length() == 0 || "null".equals(v)) return null;
+        return v;
     }
 
     @Override

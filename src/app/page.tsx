@@ -60,9 +60,11 @@ export default function Home() {
   const [hasToken, setHasToken] = useState(false)
 
   useEffect(() => {
-    // 1) 同步判定：有 token → 直接进主界面（乐观渲染，无闪屏）
+    // 首帧客户端定向：SSR 渲染骨架，挂载后同步读 token 立即切主界面/登录页
+    // （刻意在 effect 中同步 setState 一次性定向，避免「检查登录中」全屏闪屏）
     const token = getStoredToken()
     const cached = getCachedUsername()
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setHasToken(!!token)
     setMounted(true)
     if (token) {
@@ -94,7 +96,6 @@ export default function Home() {
     return () => {
       alive = false
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const doLogout = () => {

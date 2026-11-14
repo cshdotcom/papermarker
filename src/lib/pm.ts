@@ -6,9 +6,12 @@ export type Layout = 'inplace' | 'separate'
 
 export interface RoiRect { x: number; y: number; w: number; h: number }
 
-/** 一题多空：每个小空的独立判分（VLM 识别） */
+/** 一题多空：每个小空的独立判分（与 API parseBlanks 输出一致，扁平结构） */
 export interface BlankInfo {
-  roi: RoiRect
+  roiX: number
+  roiY: number
+  roiW: number
+  roiH: number
   judge: JudgeType
   getScore: number
   fullScore: number
@@ -257,6 +260,14 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ oldPassword, newPassword }),
     }),
+  changeUsername: (username: string, password: string) =>
+    jfetch<{ code: number; msg: string; username: string; token: string }>(
+      '/api/auth/username',
+      {
+        method: 'PUT',
+        body: JSON.stringify({ username, password }),
+      }
+    ),
   logout: () => {
     setStoredToken(null)
     setCachedUsername('')
@@ -284,8 +295,12 @@ export const api = {
     jfetch('/api/review', { method: 'POST', body: JSON.stringify({ taskId, action }) }),
   print: (body: any) => jfetch('/api/print', { method: 'POST', body: JSON.stringify(body) }),
   probePrinter: (body: { ippUrl?: string; mode?: string; host?: string }) =>
-    jfetch('/api/printer/probe', { method: 'POST', body: JSON.stringify(body) }),
-  getPrinter: () => jfetch<{ config: PrinterConfig }>('/api/printer/config'),
+    jfetch('/api/printer/probe', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      timeoutMs: 20000,
+    }),
+  getPrinter: () => jfetch<{ config: PrinterConfig }>('/api/printer/config', { timeoutMs: 15000 }),
   savePrinter: (cfg: Partial<PrinterConfig>) =>
     jfetch('/api/printer/config', { method: 'PUT', body: JSON.stringify(cfg) }),
   generatePdf: (taskId: string, layers?: Partial<MarkLayers>) =>
@@ -294,7 +309,7 @@ export const api = {
       body: JSON.stringify({ taskId, layers }),
     }),
   // 扫描相关
-  getScanner: () => jfetch<{ config: ScannerConfig }>('/api/scanner/config'),
+  getScanner: () => jfetch<{ config: ScannerConfig }>('/api/scanner/config', { timeoutMs: 15000 }),
   saveScanner: (cfg: Partial<ScannerConfig>) =>
     jfetch('/api/scanner/config', { method: 'PUT', body: JSON.stringify(cfg) }),
   probeScanner: (body: { esclUrl?: string; protocol?: string; host?: string }) =>
@@ -308,7 +323,7 @@ export const api = {
       body: JSON.stringify(opts),
     }),
   // API Key 应用连接
-  listApiKeys: () => jfetch<{ tokens: ApiKeyInfo[] }>('/api/apikeys'),
+  listApiKeys: () => jfetch<{ tokens: ApiKeyInfo[] }>('/api/apikeys', { timeoutMs: 15000 }),
   createApiKey: (name: string) =>
     jfetch<{ msg: string; token: { id: string; name: string; key: string } }>('/api/apikeys', {
       method: 'POST',

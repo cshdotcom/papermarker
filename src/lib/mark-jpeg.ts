@@ -1,15 +1,25 @@
 /**
- * 批注页 JPEG 渲染（Brother 9100 直连打印专用）。
+ * 批注页 JPEG 渲染 v2（Brother 9100 直连打印专用）。
  *
- * 由于 DCP-T428W 等兄弟喷墨机不走 IPP，直连打印只吃 JPEG，
+ * DCP-T428W 等兄弟喷墨机不走 IPP，直连打印只吃 JPEG，
  * 这里把「原卷图 + 批注标记」直接合成为高分辨率 JPEG：
- * 底图 = origin 图，叠加层 = SVG（题框 / √ / × / 勾上叉 / 得分 / 页首分数条）。
- * 标记画法与前端 annotation-overlay、PDF 批注层保持同款样式。
+ * 底图 = origin 图，叠加层 = SVG（题框 / √ / × / 勾上叉 / 每空标记 / 得分 / 顶部宽分数条）。
+ * 与前端 annotation-overlay、PDF 批注层共用 answer-layout 布局算法。
  */
 import sharp from 'sharp'
 import fs from 'fs'
-import type { PageImage } from './pdf-render'
-import { computeBackfill, truncateForBeside, cleanAnswerText, cleanSolutionText } from './answer-layout'
+import type { PageImage, RenderLayers } from './pdf-render'
+import { normalizeLayers } from './pdf-render'
+import {
+  computeBackfill,
+  computeBlankMarks,
+  parseBlanks,
+  truncateForBeside,
+  cleanAnswerText,
+  cleanSolutionText,
+  cleanReasonText,
+  MARK_SIZE_Q,
+} from './answer-layout'
 
 const COLORS: Record<string, string> = {
   correct: '#16a34a',
@@ -17,15 +27,21 @@ const COLORS: Record<string, string> = {
   partial: '#d97706',
   box: '#2563eb',
   scoreBg: '#1f2937',
+  answer: '#15803d',
+  reason: '#b45309',
+  solution: '#6b7280',
 }
 
 function esc(s: string): string {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-/** 答案/解析回填 SVG 片段（与批注 PDF 同一套布局规则） */
-function backfillSvg(a: any, outW: number, outH: number): string[] {
+/** 答案/错因/解析回填 SVG 片段（v2 小字号，与批注 PDF 同一套布局规则） */
+function backfillSvg(a: any, outW: number, outH: number, layers: RenderLayers): string[] {
+  if (!layers.answers && !layers.reason && !layers.solution) return []
   const plan = computeBackfill({ ...a, judgeType: a.judgeType })
+  // 一题多空：答案已写入每个空内（见 blankMarksSvg），跳过题级答案避免重复重叠
+  const hasBlanks = parseBlanks(a.blanksJson).length > 0
   const sv: string[] = []
   const toAbs = (b: { x: number; y: number; w: number; h: number }) => ({
     x: b.x * outW,
@@ -33,26 +49,88 @@ function backfillSvg(a: any, outW: number, outH: number): string[] {
     w: b.w * outW,
     h: b.h * outH,
   })
-  if (plan.answer) {
+  const beside = (m: string) => m === 'beside-mark' || m === 'inline'
+
+  if (layers.answers && plan.answer && !hasBlanks) {
     const b = toAbs(plan.answer)
-    const beside = plan.answer.mode === 'beside-mark' || plan.answer.mode === 'inline'
+    const bs = beside(plan.answer.mode)
     const cleaned = cleanAnswerText(a.answerText)
-    if (!cleaned && !plan.solution) return sv
-    const text = beside ? truncateForBeside(cleaned, 14) : cleaned
-    const fs = Math.max(11, Math.min(b.h * (beside ? 0.72 : 0.62), outW * 0.014))
-    sv.push(
-      `<rect x="${(b.x - 3).toFixed(1)}" y="${(b.y - 2).toFixed(1)}" width="${(b.w + 6).toFixed(1)}" height="${(b.h + 4).toFixed(1)}" rx="3" fill="#16a34a" fill-opacity="0.12"/>`
-    )
-    sv.push(
-      `<text x="${b.x.toFixed(1)}" y="${(b.y + b.h * 0.78).toFixed(1)}" font-size="${fs.toFixed(1)}" font-family="sans-serif" font-weight="700" fill="#15803d">答：${esc(text)}</text>`
-    )
+    const text = truncateForBeside(cleaned, bs ? 14 : 24)
+    if (text) {
+      const fs = Math.max(11, Math.min(b.h * (bs ? 0.82 : 0.7), outW * 0.011))
+      sv.push(
+        `<rect x="${(b.x - 3).toFixed(1)}" y="${(b.y - 2).toFixed(1)}" width="${(b.w + 6).toFixed(1)}" height="${(b.h + 4).toFixed(1)}" rx="3" fill="#16a34a" fill-opacity="0.12"/>`
+      )
+      sv.push(
+        `<text x="${b.x.toFixed(1)}" y="${(b.y + b.h * 0.78).toFixed(1)}" font-size="${fs.toFixed(1)}" font-family="sans-serif" font-weight="700" fill="${COLORS.answer}">答：${esc(text)}</text>`
+      )
+    }
   }
-  if (plan.solution) {
+  if (layers.reason && plan.reason) {
+    const b = toAbs(plan.reason)
+    const bs = beside(plan.reason.mode)
+    const text = truncateForBeside(cleanReasonText(a.briefReason), bs ? 18 : 30)
+    if (text) {
+      const fs = Math.max(10, Math.min(b.h * 0.8, outW * 0.0095))
+      sv.push(
+        `<text x="${b.x.toFixed(1)}" y="${(b.y + b.h * 0.8).toFixed(1)}" font-size="${fs.toFixed(1)}" font-family="sans-serif" fill="${COLORS.reason}">错因：${esc(text)}</text>`
+      )
+    }
+  }
+  if (layers.solution && plan.solution) {
     const b = toAbs(plan.solution)
-    const fs = Math.max(9, Math.min(b.h * 0.55, outW * 0.011))
-    sv.push(
-      `<text x="${b.x.toFixed(1)}" y="${(b.y + b.h * 0.8).toFixed(1)}" font-size="${fs.toFixed(1)}" font-family="sans-serif" fill="#6b7280">析：${esc(cleanSolutionText(a.fullSolution || a.briefReason).slice(0, 60))}</text>`
-    )
+    const bs = beside(plan.solution.mode)
+    const text = truncateForBeside(cleanSolutionText(a.fullSolution || a.briefReason), bs ? 18 : 34)
+    if (text) {
+      const fs = Math.max(10, Math.min(b.h * 0.8, outW * 0.0095))
+      sv.push(
+        `<text x="${b.x.toFixed(1)}" y="${(b.y + b.h * 0.8).toFixed(1)}" font-size="${fs.toFixed(1)}" font-family="sans-serif" fill="${COLORS.solution}">析：${esc(text)}</text>`
+      )
+    }
+  }
+  return sv
+}
+
+/** 每空小标记 SVG（v2） */
+function blankMarksSvg(a: any, outW: number, outH: number, layers: RenderLayers): string[] {
+  if (!layers.marks) return []
+  const blanks = parseBlanks(a.blanksJson)
+  if (blanks.length === 0) return []
+  const sv: string[] = []
+  for (const m of computeBlankMarks(blanks)) {
+    const cx = m.cx * outW
+    const cy = m.cy * outH
+    const size = m.size * outW
+    const sw = Math.max(1.4, size * 0.14)
+    const c = COLORS[m.judge] || COLORS.wrong
+    const paths =
+      m.judge === 'correct'
+        ? ['M4 12.5 L9.5 18 L20 6']
+        : m.judge === 'wrong'
+          ? ['M6 6 L18 18 M18 6 L6 18']
+          : ['M4 12.5 L9.5 18 L20 6', 'M9.2 1.2 L18.6 10.6 M18.6 1.2 L9.2 10.6']
+    const widths = m.judge === 'partial' ? [3, 2.6] : [3]
+    paths.forEach((p, i) => {
+      sv.push(
+        `<g transform="translate(${(cx - size / 2).toFixed(1)},${(cy - size / 2).toFixed(1)}) scale(${(size / 24).toFixed(3)})"><path d="${p}" stroke="${c}" stroke-width="${widths[i]}" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>`
+      )
+    })
+    if (layers.scores && m.scoreText) {
+      const fs = Math.max(9, size * 0.5)
+      sv.push(
+        `<text x="${(cx + size * 0.7).toFixed(1)}" y="${(cy + fs * 0.35).toFixed(1)}" font-size="${fs.toFixed(1)}" font-family="sans-serif" font-weight="700" fill="${COLORS.scoreBg}">${m.scoreText}</text>`
+      )
+    }
+    if (layers.answers && m.answerText) {
+      const bx = m.box.x * outW
+      const by = m.box.y * outH
+      const bw = m.box.w * outW
+      const bh = m.box.h * outH
+      const fs = Math.max(10, Math.min(bh * 0.75, outW * 0.011))
+      sv.push(
+        `<text x="${(bx + bw / 2).toFixed(1)}" y="${(by + bh / 2 + fs * 0.35).toFixed(1)}" font-size="${fs.toFixed(1)}" font-family="sans-serif" font-weight="700" fill="${COLORS.answer}" text-anchor="middle">${esc(m.answerText)}</text>`
+      )
+    }
   }
   return sv
 }
@@ -61,7 +139,6 @@ function backfillSvg(a: any, outW: number, outH: number): string[] {
 function judgeMarkPath(type: string): { paths: string[]; widths: number[] } {
   if (type === 'correct') return { paths: ['M4 12.5 L9.5 18 L20 6'], widths: [3] }
   if (type === 'wrong') return { paths: ['M6 6 L18 18 M18 6 L6 18'], widths: [3] }
-  // 半对：完整勾 + 上方叉
   return {
     paths: ['M4 12.5 L9.5 18 L20 6', 'M9.2 1.2 L18.6 10.6 M18.6 1.2 L9.2 10.6'],
     widths: [3, 2.6],
@@ -73,6 +150,13 @@ export interface MarkJpegPage {
   jpeg: Buffer
 }
 
+export interface RenderJpegOpts {
+  withImage?: boolean
+  width?: number
+  layers?: RenderLayers
+  meta?: { paperName?: string; studentName?: string | null }
+}
+
 /**
  * 把一个任务的批注重染为 JPEG 页数组。
  * @param pageImages pageNo → 原图（path/w/h）
@@ -82,9 +166,10 @@ export interface MarkJpegPage {
 export async function renderAnnotatedJpegs(
   pageImages: Map<number, PageImage>,
   annotations: any[],
-  opts: { withImage?: boolean; width?: number } = {}
+  opts: RenderJpegOpts = {}
 ): Promise<MarkJpegPage[]> {
   const withImage = opts.withImage !== false
+  const layers = normalizeLayers(opts.layers)
   const outW = opts.width || 1240 // A4 @150dpi，喷墨打印足够清晰
   const out: MarkJpegPage[] = []
 
@@ -121,17 +206,32 @@ export async function renderAnnotatedJpegs(
 
     // SVG 叠加层（与底图同尺寸）
     const sv: string[] = []
-    // 页首分数条
-    const tagW = Math.round(outW * 0.4)
-    const tagH = Math.round(outW * 0.024)
-    const tagX = outW - tagW - Math.round(outW * 0.04)
-    sv.push(
-      `<rect x="${tagX}" y="${Math.round(outW * 0.02)}" width="${tagW}" height="${tagH}" rx="${Math.round(tagH * 0.28)}" fill="${COLORS.scoreBg}"/>`
-    )
-    const fs1 = Math.max(11, Math.round(tagH * 0.5))
-    sv.push(
-      `<text x="${tagX + tagW - Math.round(tagH * 0.35)}" y="${Math.round(outW * 0.02) + tagH * 0.68}" font-size="${fs1}" font-family="sans-serif" font-weight="700" fill="#ffffff" text-anchor="end">第 ${pageNo} 页 ${pageGetSum}/${pageFullSum} 总分 ${totalGet}/${totalFull}</text>`
-    )
+
+    // 顶部宽分数条（v2）：练习名 | 学生 得分 | 日期·页码
+    if (layers.banner) {
+      const m = Math.round(outW * 0.03)
+      const tagH = Math.round(outW * 0.026)
+      const tagY = Math.round(outW * 0.018)
+      const tagW = outW - m * 2
+      sv.push(
+        `<rect x="${m}" y="${tagY}" width="${tagW}" height="${tagH}" rx="${Math.round(tagH * 0.2)}" fill="${COLORS.scoreBg}"/>`
+      )
+      const paper = String(opts.meta?.paperName || '未命名试卷')
+      const paperTxt = paper.length > 18 ? paper.slice(0, 18) + '…' : paper
+      const student = String(opts.meta?.studentName || '').trim()
+      const date = new Date().toISOString().slice(0, 10)
+      const fs1 = Math.max(11, Math.round(tagH * 0.46))
+      const cy = tagY + tagH / 2
+      sv.push(
+        `<text x="${m + Math.round(tagH * 0.35)}" y="${(cy + fs1 * 0.35).toFixed(1)}" font-size="${fs1}" font-family="sans-serif" font-weight="700" fill="#ffffff">${esc(paperTxt)}</text>`
+      )
+      sv.push(
+        `<text x="${m + Math.round(tagW * 0.5)}" y="${(cy + fs1 * 0.35).toFixed(1)}" font-size="${fs1}" font-family="sans-serif" fill="#ffffff" text-anchor="middle">${esc(`${student ? student + ' ' : ''}得分 ${pageGetSum}/${pageFullSum}（总 ${totalGet}/${totalFull}）`)}</text>`
+      )
+      sv.push(
+        `<text x="${m + tagW - Math.round(tagH * 0.35)}" y="${(cy + fs1 * 0.35).toFixed(1)}" font-size="${fs1}" font-family="sans-serif" fill="#ffffff" text-anchor="end">${esc(`${date} · 第${pageNo}/${pageNos.length}页`)}</text>`
+      )
+    }
 
     for (const a of list) {
       const bx = (a.roiX || 0) * outW
@@ -140,33 +240,40 @@ export async function renderAnnotatedJpegs(
       const bh = (a.roiH || 0) * outH
       if (bw < 8 || bh < 8) continue
 
-      if (withImage) {
+      if (withImage && layers.boxes) {
         // 题框
         sv.push(
-          `<rect x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="4" fill="${COLORS.box}" fill-opacity="0.06" stroke="${COLORS.box}" stroke-width="${Math.max(1, outW * 0.0012).toFixed(1)}"/>`
+          `<rect x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="4" fill="${COLORS.box}" fill-opacity="0.05" stroke="${COLORS.box}" stroke-width="${Math.max(1, outW * 0.001).toFixed(1)}"/>`
         )
       }
 
-      // 判分标记（右上角内侧）
-      const markSize = Math.max(18, Math.min(bh, outW * 0.03))
-      const mx = bx + bw - markSize * 0.85
-      const my = by + markSize * 0.1
-      const { paths, widths } = judgeMarkPath(a.judgeType)
-      const c = COLORS[a.judgeType] || COLORS.wrong
-      paths.forEach((p, i) => {
+      // 题级判分标记（右上角内侧，v2 小号）
+      if (layers.marks) {
+        const markSize = Math.max(14, Math.min(bh * 0.55, MARK_SIZE_Q * outW, outW * 0.024))
+        const mx = bx + bw - markSize * 0.85
+        const my = by + markSize * 0.1
+        const { paths, widths } = judgeMarkPath(a.judgeType)
+        const c = COLORS[a.judgeType] || COLORS.wrong
+        paths.forEach((p, i) => {
+          sv.push(
+            `<g transform="translate(${mx.toFixed(1)},${my.toFixed(1)}) scale(${(markSize / 24).toFixed(3)})"><path d="${p}" stroke="${c}" stroke-width="${widths[i]}" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>`
+          )
+        })
+      }
+
+      // 每题得分（小字，框内右下角）
+      if (layers.scores) {
+        const fs2 = Math.max(9, Math.round(outW * 0.0085))
         sv.push(
-          `<g transform="translate(${mx.toFixed(1)},${my.toFixed(1)}) scale(${(markSize / 24).toFixed(3)})"><path d="${p}" stroke="${c}" stroke-width="${widths[i]}" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>`
+          `<text x="${(bx + bw - 4).toFixed(1)}" y="${(by + bh - fs2 * 0.3).toFixed(1)}" font-size="${fs2}" font-family="sans-serif" font-weight="700" fill="${COLORS.scoreBg}" text-anchor="end">${a.getScore}/${a.fullScore}</text>`
         )
-      })
+      }
 
-      // 得分数字
-      const fs2 = Math.max(10, Math.round(markSize * 0.42))
-      sv.push(
-        `<text x="${(bx + bw - 4).toFixed(1)}" y="${(by + bh + fs2).toFixed(1)}" font-size="${fs2}" font-family="sans-serif" font-weight="700" fill="${COLORS.scoreBg}" text-anchor="end">${a.getScore}/${a.fullScore}</text>`
-      )
+      // 每空小标记
+      sv.push(...blankMarksSvg(a, outW, outH, layers))
 
-      // 答案/解析回填（withImage 模式；纯标记层套印不回填）
-      if (withImage) sv.push(...backfillSvg(a, outW, outH))
+      // 答案/错因/解析回填
+      if (withImage) sv.push(...backfillSvg(a, outW, outH, layers))
     }
 
     const overlaySvg = Buffer.from(

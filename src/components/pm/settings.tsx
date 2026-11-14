@@ -19,6 +19,7 @@ import {
   Smartphone,
   ShieldCheck,
   UserRound,
+  Layers,
 } from 'lucide-react'
 import {
   api,
@@ -26,6 +27,8 @@ import {
   type ScannerConfig,
   type ScannerCaps,
   type ApiKeyInfo,
+  type MarkLayers,
+  setStoredToken,
 } from '@/lib/pm'
 import { usePm } from '@/lib/pm-store'
 import { useToast } from '@/hooks/use-toast'
@@ -37,10 +40,22 @@ import { Switch } from '@/components/ui/switch'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 
+/** 标记层默认设置项（与打印面板一致） */
+const LAYER_ITEMS: { key: keyof MarkLayers; label: string }[] = [
+  { key: 'marks', label: '判分标记 √×⍻' },
+  { key: 'scores', label: '每题得分' },
+  { key: 'answers', label: '答案回填' },
+  { key: 'reason', label: '错因（错在哪步）' },
+  { key: 'solution', label: '完整解析' },
+  { key: 'boxes', label: '题框' },
+  { key: 'banner', label: '顶部分数条' },
+]
+
 export function Settings() {
   const [cfg, setCfg] = useState<PrinterConfig | null>(null)
   const [scfg, setScfg] = useState<ScannerConfig | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [probing, setProbing] = useState(false)
   const [probeResult, setProbeResult] = useState<{ ok: boolean; msg: string } | null>(null)
@@ -53,6 +68,24 @@ export function Settings() {
     trace?: string[]
   } | null>(null)
 
+  // 标记层默认（用户级，保存后影响新任务与重新生成）
+  const { layers, setLayers } = usePm()
+  const [layerDefaults, setLayerDefaults] = useState<MarkLayers>(layers)
+  const [savingLayers, setSavingLayers] = useState(false)
+
+  const saveLayerDefaults = async () => {
+    setSavingLayers(true)
+    try {
+      await api.saveLayerConfig(layerDefaults)
+      setLayers(layerDefaults)
+      toast({ title: '已保存标记层默认设置', description: '新任务与重新生成的 PDF 将按此生效' })
+    } catch (e: any) {
+      toast({ title: '保存失败', description: e.message, variant: 'destructive' })
+    } finally {
+      setSavingLayers(false)
+    }
+  }
+
   // API Key 应用连接
   const [keys, setKeys] = useState<ApiKeyInfo[]>([])
   const [newKeyName, setNewKeyName] = useState('')
@@ -62,12 +95,41 @@ export function Settings() {
 
   const { toast } = useToast()
 
-  // 账号安全（修改密码）
+  // 账号安全（修改密码 / 修改用户名）
   const username = usePm((s) => s.username)
+  const setUsernameGlobal = usePm((s) => s.setUsername)
   const [oldPw, setOldPw] = useState('')
   const [newPw, setNewPw] = useState('')
   const [newPw2, setNewPw2] = useState('')
   const [changingPw, setChangingPw] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [namePw, setNamePw] = useState('')
+  const [changingName, setChangingName] = useState(false)
+
+  const changeUsername = async () => {
+    const name = newName.trim()
+    if (!name || !namePw) {
+      toast({ title: '请填写新用户名和密码', variant: 'destructive' })
+      return
+    }
+    setChangingName(true)
+    try {
+      const r = await api.changeUsername(name, namePw)
+      toast({ title: r.msg || '用户名已修改' })
+      // 静默替换本地 token
+      if (r.token) setStoredToken(r.token, !!localStorage.getItem('pm_token'))
+      setUsernameGlobal(r.username || name)
+      try {
+        localStorage.setItem('pm_username', r.username || name)
+      } catch {}
+      setNewName('')
+      setNamePw('')
+    } catch (e: any) {
+      toast({ title: '修改失败', description: e.message, variant: 'destructive' })
+    } finally {
+      setChangingName(false)
+    }
+  }
 
   const changePassword = async () => {
     if (!oldPw || !newPw || !newPw2) {
@@ -98,18 +160,26 @@ export function Settings() {
 
   const fetchCfg = async () => {
     setLoading(true)
-    try {
-      const r = await api.getPrinter()
-      setCfg(r.config)
-      const s = await api.getScanner()
-      setScfg(s.config)
-      const k = await api.listApiKeys().catch(() => null)
-      if (k) setKeys(k.tokens)
-    } catch (e: any) {
-      toast({ title: '加载失败', description: e.message, variant: 'destructive' })
-    } finally {
-      setLoading(false)
+    setLoadError(null)
+    // 并行加载（各自 15s 超时，单个失败不阻塞其它）
+    const [p, s, k] = await Promise.allSettled([
+      api.getPrinter(),
+      api.getScanner(),
+      api.listApiKeys(),
+    ])
+    if (p.status === 'fulfilled') setCfg(p.value.config)
+    if (s.status === 'fulfilled') setScfg(s.value.config)
+    if (k.status === 'fulfilled') setKeys(k.value.tokens)
+    if (p.status === 'rejected') {
+      setLoadError(p.reason?.message || '加载失败')
+    } else {
+      // 打印机配置是主依赖；扫描仪/密钥失败只提示
+      if (s.status === 'rejected' || k.status === 'rejected') {
+        const firstErr = s.status === 'rejected' ? s.reason?.message : k.reason?.message
+        toast({ title: '部分配置加载失败', description: String(firstErr || ''), variant: 'destructive' })
+      }
     }
+    setLoading(false)
   }
 
   useEffect(() => {
@@ -196,8 +266,25 @@ export function Settings() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-24">
-        <Loader2 className="h-6 w-6 animate-spin text-emerald-600" />
+      <div className="mx-auto max-w-2xl space-y-4">
+        {/* 骨架屏（与卡片同构，不闪屏） */}
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="h-40 animate-pulse rounded-xl border bg-muted/40" />
+        ))}
+      </div>
+    )
+  }
+
+  // 加载失败：给出明确错误与重试（绝不无限转圈）
+  if (!cfg && loadError) {
+    return (
+      <div className="mx-auto flex max-w-2xl flex-col items-center justify-center gap-3 py-20">
+        <XCircle className="h-8 w-8 text-red-500" />
+        <p className="text-sm font-medium">设置加载失败</p>
+        <p className="max-w-md text-center text-xs text-muted-foreground">{loadError}</p>
+        <Button size="sm" onClick={fetchCfg} className="bg-emerald-600 hover:bg-emerald-700">
+          重试
+        </Button>
       </div>
     )
   }
@@ -276,6 +363,80 @@ export function Settings() {
             >
               {changingPw ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <KeyRound className="mr-1 h-3.5 w-3.5" />}
               修改密码
+            </Button>
+          </div>
+
+          <div className="border-t pt-3">
+            <div className="mb-2 text-xs font-medium">修改用户名</div>
+            <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+              <Input
+                placeholder={`新用户名（当前：${username || 'teacher'}）`}
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                disabled={changingName}
+                className="h-8 text-xs"
+              />
+              <Input
+                type="password"
+                placeholder="登录密码（验证身份）"
+                value={namePw}
+                onChange={(e) => setNamePw(e.target.value)}
+                disabled={changingName}
+                className="h-8 text-xs"
+              />
+              <Button
+                size="sm"
+                onClick={changeUsername}
+                disabled={changingName || !newName.trim() || !namePw}
+                className="shrink-0"
+                variant="outline"
+              >
+                {changingName ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <UserRound className="mr-1 h-3.5 w-3.5" />}
+                改用户名
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ============ 标记层默认（用户级，错因/答案默认开） ============ */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Layers className="h-4 w-4 text-emerald-600" />
+            批注标记层默认
+          </CardTitle>
+          <CardDescription>
+            控制批注/标记层 PDF 与直连打印里包含哪些内容；错因、答案默认开启，可随时调整
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid gap-x-4 gap-y-2 sm:grid-cols-2">
+            {LAYER_ITEMS.map((it) => (
+              <label
+                key={it.key}
+                className="flex cursor-pointer items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs transition hover:bg-muted/50"
+              >
+                <span>{it.label}</span>
+                <Switch
+                  checked={layerDefaults[it.key]}
+                  onCheckedChange={(v) => setLayerDefaults({ ...layerDefaults, [it.key]: v })}
+                />
+              </label>
+            ))}
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[11px] text-muted-foreground">
+              复核页与打印面板的图层开关即时生效；这里保存的是默认值（新任务/重新生成用）
+            </p>
+            <Button
+              size="sm"
+              onClick={saveLayerDefaults}
+              disabled={savingLayers}
+              className="shrink-0 bg-emerald-600 hover:bg-emerald-700"
+            >
+              {savingLayers ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-1 h-3.5 w-3.5" />}
+              保存默认
             </Button>
           </div>
         </CardContent>

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { authGuard } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { absPath } from '@/lib/storage'
+import { parseBlanks } from '@/lib/answer-layout'
 import fs from 'fs'
 
 export async function GET(
@@ -79,6 +80,7 @@ export async function GET(
           a.answerRoiX != null && a.answerRoiW != null
             ? { x: a.answerRoiX, y: a.answerRoiY!, w: a.answerRoiW, h: a.answerRoiH! }
             : null,
+        blanks: a.blanksJson ? parseBlanks(a.blanksJson) : null,
       })),
       pages: task.pages.map((p) => ({
         pageNo: p.pageNo,

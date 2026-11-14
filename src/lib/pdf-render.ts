@@ -3,7 +3,16 @@ import fs from 'fs'
 import path from 'path'
 import { db } from './db'
 import { pdfDir, relPath, absPath } from './storage'
-import { computeBackfill, truncateForBeside, cleanAnswerText, cleanSolutionText } from './answer-layout'
+import {
+  computeBackfill,
+  computeBlankMarks,
+  parseBlanks,
+  truncateForBeside,
+  cleanAnswerText,
+  cleanSolutionText,
+  cleanReasonText,
+  MARK_SIZE_Q,
+} from './answer-layout'
 
 export type JudgeType = 'correct' | 'wrong' | 'partial'
 
@@ -13,15 +22,55 @@ export interface PageImage {
   h: number
 }
 
+/** 渲染图层开关（与前端 MarkLayers 一致） */
+export interface RenderLayers {
+  marks: boolean
+  scores: boolean
+  answers: boolean
+  reason: boolean
+  solution: boolean
+  boxes: boolean
+  banner: boolean
+}
+
+export const DEFAULT_LAYERS: RenderLayers = {
+  marks: true,
+  scores: true,
+  answers: true,
+  reason: true,
+  solution: false,
+  boxes: true,
+  banner: true,
+}
+
+export function normalizeLayers(raw: any): RenderLayers {
+  const l = { ...DEFAULT_LAYERS }
+  if (raw && typeof raw === 'object') {
+    for (const k of Object.keys(DEFAULT_LAYERS) as (keyof RenderLayers)[]) {
+      if (typeof raw[k] === 'boolean') l[k] = raw[k]
+    }
+  }
+  return l
+}
+
 export interface RenderMarkInput {
   taskId: string
   pageImages: Map<number, PageImage> // pageNo → 图片
   annotations: any[]
+  /** 顶部宽分数条信息 */
+  meta?: {
+    paperName?: string
+    studentName?: string | null
+    printDate?: Date
+  }
+  layers?: RenderLayers
 }
 
 const A4_W = 595.28
 const A4_H = 841.89
 const MARGIN = 24
+/** 顶部宽分数条高度 */
+const BANNER_H = 30
 
 const COLORS = {
   correct: '#16a34a', // green
@@ -30,10 +79,12 @@ const COLORS = {
   box: '#2563eb',
   scoreBg: '#1f2937',
   scoreText: '#ffffff',
+  answer: '#15803d',
+  reason: '#b45309',
+  solution: '#6b7280',
 }
 
 // ---------- 中文字体（解决导出乱码） ----------
-// 优先使用项目内嵌字体，回退系统字体目录
 const FONT_DIRS = [
   path.join(process.cwd(), 'assets', 'fonts'),
   '/usr/share/fonts/truetype/chinese',
@@ -50,11 +101,9 @@ function findFont(name: string): string | null {
 const CJK_REG_PATH = findFont('NotoSansSC-Regular.ttf')
 const CJK_BOLD_PATH = findFont('NotoSansSC-Bold.ttf')
 
-/** 字体名：有中文字体用 cjk，否则退回 Helvetica（仅英文数字可正常显示） */
 const F_REG = CJK_REG_PATH ? 'cjk' : 'Helvetica'
 const F_BOLD = CJK_BOLD_PATH ? 'cjk-bold' : 'Helvetica-Bold'
 
-/** 每个文档创建后注册中文字体（pdfkit 自动子集化，仅嵌入用到的字形） */
 function registerCjk(doc: PDFDocument) {
   if (CJK_REG_PATH) doc.registerFont('cjk', CJK_REG_PATH)
   if (CJK_BOLD_PATH) doc.registerFont('cjk-bold', CJK_BOLD_PATH)
@@ -63,23 +112,24 @@ function registerCjk(doc: PDFDocument) {
 /** 把图片等比缩放铺到 A4 页面可用区域，返回绘图矩形 */
 function fitRect(imgW: number, imgH: number) {
   const availW = A4_W - MARGIN * 2
-  const availH = A4_H - MARGIN * 2 - 28 // 顶部留分数栏
+  const availH = A4_H - MARGIN * 2 - BANNER_H
   if (!imgW || !imgH) {
-    return { x: MARGIN, y: MARGIN + 28, w: availW, h: availH }
+    return { x: MARGIN, y: MARGIN + BANNER_H, w: availW, h: availH }
   }
   const scale = Math.min(availW / imgW, availH / imgH)
   const w = imgW * scale
   const h = imgH * scale
   const x = MARGIN + (availW - w) / 2
-  const y = MARGIN + 28 + (availH - h) / 2
+  const y = MARGIN + BANNER_H + (availH - h) / 2
   return { x, y, w, h }
 }
 
 /** 绘制 √ 勾（绿色） */
 function drawCheck(doc: PDFDocument, cx: number, cy: number, size: number, color: string) {
   doc.save()
-  doc.lineWidth(size * 0.14)
+  doc.lineWidth(Math.max(0.8, size * 0.14))
   doc.strokeColor(color)
+  doc.lineCap('round')
   doc.moveTo(cx - size * 0.4, cy)
   doc.lineTo(cx - size * 0.08, cy + size * 0.32)
   doc.lineTo(cx + size * 0.42, cy - size * 0.34)
@@ -90,8 +140,9 @@ function drawCheck(doc: PDFDocument, cx: number, cy: number, size: number, color
 /** 绘制 × 叉（红色） */
 function drawCross(doc: PDFDocument, cx: number, cy: number, size: number, color: string) {
   doc.save()
-  doc.lineWidth(size * 0.14)
+  doc.lineWidth(Math.max(0.8, size * 0.14))
   doc.strokeColor(color)
+  doc.lineCap('round')
   doc.moveTo(cx - size * 0.35, cy - size * 0.35)
   doc.lineTo(cx + size * 0.35, cy + size * 0.35)
   doc.moveTo(cx + size * 0.35, cy - size * 0.35)
@@ -100,16 +151,11 @@ function drawCross(doc: PDFDocument, cx: number, cy: number, size: number, color
   doc.restore()
 }
 
-/**
- * 绘制半对标记：一个完整的勾，勾的上方再打一个叉（琥珀色）
- * 勾照常画，叉覆盖在勾的上半部区域
- */
+/** 绘制半对标记 ⍻：完整勾 + 勾上部小叉（矢量，非字符） */
 function drawHalfCheck(doc: PDFDocument, cx: number, cy: number, size: number, color: string) {
-  // 1. 完整的勾
   drawCheck(doc, cx, cy, size, color)
-  // 2. 勾上方打一个叉（中心位于勾的上部，半径 0.20*size）
   doc.save()
-  doc.lineWidth(size * 0.11)
+  doc.lineWidth(Math.max(0.7, size * 0.11))
   doc.strokeColor(color)
   doc.lineCap('round')
   const r = size * 0.2
@@ -135,26 +181,42 @@ function drawJudgeMark(
   else drawHalfCheck(doc, x, y, size, COLORS.partial)
 }
 
-function drawScoreTag(
+/**
+ * 顶部宽分数条（v2）：
+ * 【练习名称】 学生：XXX 得分 x/y · 打印日期 YYYY-MM-DD · 第 N/M 页
+ */
+function drawBanner(
   doc: PDFDocument,
+  meta: RenderMarkInput['meta'],
   pageNo: number,
+  totalPages: number,
   pageGet: number,
   pageFull: number,
   totalGet: number,
   totalFull: number
 ) {
-  const label = `第 ${pageNo} 页  ${pageGet} / ${pageFull}    总分 ${totalGet} / ${totalFull}`
-  const w = 230
+  const x = MARGIN
+  const y = MARGIN - 6
+  const w = A4_W - MARGIN * 2
   const h = 22
-  const x = A4_W - MARGIN - w
-  const y = MARGIN
   doc.save()
-  doc.roundedRect(x, y, w, h, 6).fillColor(COLORS.scoreBg).fill()
-  doc
-    .fillColor(COLORS.scoreText)
-    .fontSize(11)
-    .font(F_BOLD)
-    .text(label, x + 8, y + 6, { width: w - 16, align: 'right' })
+  doc.roundedRect(x, y, w, h, 5).fillColor(COLORS.scoreBg).fill()
+  const cy = y + h / 2
+  // 左：练习名称
+  const paper = String(meta?.paperName || '未命名试卷')
+  const student = String(meta?.studentName || '').trim()
+  const date = (meta?.printDate || new Date()).toISOString().slice(0, 10)
+  doc.fillColor('#ffffff').font(F_BOLD).fontSize(9)
+  // 左侧：练习名（截断 18 字）
+  const paperTxt = paper.length > 18 ? paper.slice(0, 18) + '…' : paper
+  doc.text(paperTxt, x + 8, cy - 4.5, { width: w * 0.42, align: 'left', lineBreak: false })
+  // 中：谁得了几分
+  const mid = `${student ? student + ' ' : ''}得分 ${pageGet}/${pageFull}（总 ${totalGet}/${totalFull}）`
+  doc.font(F_REG).fontSize(8)
+  doc.text(mid, x + w * 0.42, cy - 4, { width: w * 0.34, align: 'center', lineBreak: false })
+  // 右：打印日期 + 页码
+  const right = `${date} · 第${pageNo}/${totalPages}页`
+  doc.text(right, x + w * 0.76, cy - 4, { width: w * 0.24 - 8, align: 'right', lineBreak: false })
   doc.restore()
 }
 
@@ -164,25 +226,54 @@ function annotationRect(rect: { x: number; y: number; w: number; h: number }, a:
   const by = rect.y + a.roiY * rect.h
   const bw = a.roiW * rect.w
   const bh = a.roiH * rect.h
-  const markSize = Math.min(bh, 28)
+  // v2：题级标记变小（不超过页宽 2.2%、不超过框高 55%、上限 16pt）
+  const markSize = Math.min(bh * 0.55, MARK_SIZE_Q * rect.w, 16)
   const mx = bx + bw - markSize * 0.7
   const my = by + markSize * 0.6
   return { bx, by, bw, bh, markSize, mx, my }
 }
 
+/** 小号文本通用绘制（白色描边底避免压住笔迹） */
+function smallText(
+  doc: PDFDocument,
+  text: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  fontSize: number,
+  color: string,
+  bold = false
+) {
+  const fs_ = Math.max(6, Math.min(fontSize, 9))
+  doc
+    .fontSize(fs_)
+    .fillColor(color)
+    .font(bold ? F_BOLD : F_REG)
+    .text(text, x, y + (h - fs_) / 2 - 0.5, {
+      width: w,
+      height: h,
+      ellipsis: true,
+      lineBreak: false,
+      align: 'left',
+    })
+}
+
 /**
- * 答案/解析回填（用户需求）：
- *  - 有空白位置（answerRoi / ROI 下部富余）→ 答案写入空白处，解析紧随其后
- *  - 没有位置 → 答案写在勾勾叉叉旁边（短文本），解析省略
+ * 答案/错因/解析回填（v2，全部小字号，位置锁定不跑位）：
+ *  - 有空白位置 → 答案写入空白处，错因/解析紧随其后
+ *  - 没有位置 → 写在勾叉旁边
  */
 function drawBackfill(
   doc: PDFDocument,
   rect: { x: number; y: number; w: number; h: number },
-  a: any
+  a: any,
+  layers: RenderLayers
 ) {
+  if (!layers.answers && !layers.reason && !layers.solution) return
   const plan = computeBackfill({ ...a, judgeType: a.judgeType })
-  if (!plan.answer && !plan.solution) return
-
+  // 一题多空：答案已写入每个空内（见 drawBlankMarks），跳过题级答案避免重复重叠
+  const hasBlanks = parseBlanks(a.blanksJson).length > 0
   const toAbs = (b: { x: number; y: number; w: number; h: number }) => ({
     x: rect.x + b.x * rect.w,
     y: rect.y + b.y * rect.h,
@@ -190,56 +281,155 @@ function drawBackfill(
     h: b.h * rect.h,
   })
 
-  if (plan.answer) {
+  if (layers.answers && plan.answer && !hasBlanks) {
     const b = toAbs(plan.answer)
     const beside = plan.answer.mode === 'beside-mark' || plan.answer.mode === 'inline'
     const cleaned = cleanAnswerText(a.answerText)
-    const text = beside ? truncateForBeside(cleaned, 14) : cleaned
-    if (!text && !plan.solution) return
-    const fs_ = beside ? Math.max(7.5, Math.min(b.h * 0.72, 9.5)) : Math.max(8, Math.min(b.h * 0.62, 11))
-    // 答案底色（淡绿）+ 绿色手写风文字
-    doc.save()
-    doc.roundedRect(b.x - 2, b.y - 1, b.w + 4, b.h + 2, 3)
-    doc.fillOpacity(0.12).fill('#16a34a')
-    doc.restore()
-    doc
-      .fontSize(fs_)
-      .fillColor('#15803d')
-      .font(F_BOLD)
-      .text(`答：${text}`, b.x, b.y + (b.h - fs_) / 2 - 1, {
-        width: b.w,
-        height: b.h,
-        ellipsis: true,
-        lineBreak: false,
-        align: 'left',
-      })
+    const text = beside ? truncateForBeside(cleaned, 14) : truncateForBeside(cleaned, 24)
+    if (text) {
+      doc.save()
+      doc.roundedRect(b.x - 2, b.y - 1, b.w + 4, b.h + 2, 3)
+      doc.fillOpacity(0.12).fill('#16a34a')
+      doc.restore()
+      smallText(doc, `答：${text}`, b.x, b.y, b.w, b.h, beside ? 7 : 8, COLORS.answer, true)
+    }
   }
 
-  if (plan.solution) {
+  if (layers.reason && plan.reason) {
+    const b = toAbs(plan.reason)
+    const beside = plan.reason.mode === 'beside-mark' || plan.reason.mode === 'inline'
+    const text = truncateForBeside(cleanReasonText(a.briefReason), beside ? 18 : 30)
+    if (text) smallText(doc, `错因：${text}`, b.x, b.y, b.w, b.h, 6.5, COLORS.reason)
+  }
+
+  if (layers.solution && plan.solution) {
     const b = toAbs(plan.solution)
-    const fs_ = Math.max(6.5, Math.min(b.h * 0.55, 8.5))
-    doc
-      .fontSize(fs_)
-      .fillColor('#6b7280')
-      .font(F_REG)
-      .text(`析：${cleanSolutionText(a.fullSolution || a.briefReason)}`, b.x, b.y + (b.h - fs_) / 2 - 1, {
-        width: b.w,
-        height: b.h,
-        ellipsis: true,
-        lineBreak: false,
-        align: 'left',
-      })
+    const beside = plan.solution.mode === 'beside-mark' || plan.solution.mode === 'inline'
+    const text = truncateForBeside(cleanSolutionText(a.fullSolution || a.briefReason), beside ? 18 : 34)
+    if (text) smallText(doc, `析：${text}`, b.x, b.y, b.w, b.h, 6.5, COLORS.solution)
   }
 }
 
+/** 每空小标记（v2）：小 √×⍻ 贴空右侧 + 小得分 + 空内答案 */
+function drawBlankMarks(
+  doc: PDFDocument,
+  rect: { x: number; y: number; w: number; h: number },
+  a: any,
+  layers: RenderLayers
+) {
+  if (!layers.marks) return
+  const blanks = parseBlanks(a.blanksJson)
+  if (blanks.length === 0) return
+  const marks = computeBlankMarks(blanks)
+  for (const m of marks) {
+    const cx = rect.x + m.cx * rect.w
+    const cy = rect.y + m.cy * rect.h
+    const size = m.size * rect.w
+    drawJudgeMark(doc, m.judge as JudgeType, cx, cy, size)
+    // 小得分（标记右侧）
+    if (layers.scores && m.scoreText) {
+      doc
+        .fontSize(Math.max(5.5, size * 0.5))
+        .fillColor(COLORS.scoreBg)
+        .font(F_BOLD)
+        .text(m.scoreText, cx + size * 0.7, cy - size * 0.3, {
+          width: size * 1.6,
+          lineBreak: false,
+        })
+    }
+    // 空内正确答案（错/半对的空，小字居中）
+    if (layers.answers && m.answerText) {
+      const bx = rect.x + m.box.x * rect.w
+      const by = rect.y + m.box.y * rect.h
+      const bw = m.box.w * rect.w
+      const bh = m.box.h * rect.h
+      doc
+        .fontSize(Math.max(6, Math.min(bh * 0.7, 8)))
+        .fillColor(COLORS.answer)
+        .font(F_BOLD)
+        .text(m.answerText, bx, by + bh / 2 - 4, {
+          width: bw,
+          align: 'center',
+          lineBreak: false,
+          ellipsis: true,
+        })
+    }
+  }
+}
+
+/** 页级公共绘制（批注 PDF 与纯标记层共用） */
+function drawPageAnnotations(
+  doc: PDFDocument,
+  rect: { x: number; y: number; w: number; h: number },
+  list: any[],
+  layers: RenderLayers,
+  opts: { withBoxes: boolean; withBackfill: boolean }
+) {
+  for (const a of list) {
+    const { bx, by, bw, bh, markSize, mx, my } = annotationRect(rect, a)
+
+    if (opts.withBoxes && layers.boxes) {
+      doc.save()
+      doc.lineWidth(1)
+      doc.strokeColor(COLORS.box)
+      doc.roundedRect(bx, by, bw, bh, 4).stroke()
+      doc.roundedRect(bx, by, bw, bh, 4)
+      doc.fillOpacity(0.05).fill(COLORS.box)
+      doc.restore()
+    }
+
+    // 题级判分符号（右上角内侧，v2 小号）
+    if (layers.marks) {
+      drawJudgeMark(doc, a.judgeType, mx, my, markSize)
+    }
+
+    // 每题得分（小字，框内右下角，不跑位）
+    if (layers.scores) {
+      const fs_ = 7
+      doc
+        .fontSize(fs_)
+        .fillColor(COLORS.scoreBg)
+        .font(F_BOLD)
+        .text(`${a.getScore}/${a.fullScore}`, bx + 2, by + bh - fs_ - 1.5, {
+          width: bw - 4,
+          align: 'right',
+          lineBreak: false,
+        })
+    }
+
+    // 每空小标记
+    drawBlankMarks(doc, rect, a, layers)
+
+    // 答案/错因/解析回填
+    if (opts.withBackfill) drawBackfill(doc, rect, a, layers)
+  }
+}
+
+/** 页码集合与分数汇总（两个渲染器共用） */
+function pageStats(input: RenderMarkInput, annotations: any[]) {
+  const pageSet = new Set<number>(input.pageImages.keys())
+  for (const a of annotations) pageSet.add(a.pageNo || 1)
+  if (pageSet.size === 0) pageSet.add(1)
+  const pageNos = Array.from(pageSet).sort((a, b) => a - b)
+  const firstImg = Array.from(input.pageImages.values())[0]
+  let totalGet = 0
+  let totalFull = 0
+  for (const a of annotations) {
+    totalGet += a.getScore
+    totalFull += a.fullScore
+  }
+  return { pageNos, firstImg, totalGet, totalFull }
+}
+
 /**
- * 渲染批注 PDF：逐页原图 + 题框 + √/×/半对 + 右上角分数
+ * 渲染批注 PDF：逐页原图 + 题框 + √/×/半对 + 每空标记 + 宽分数条
  */
 export async function renderMarkPdf(
   outPath: string,
   input: RenderMarkInput,
   annotations: any[]
 ): Promise<void> {
+  const layers = normalizeLayers(input.layers)
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: [A4_W, A4_H], margin: 0 })
     registerCjk(doc)
@@ -248,30 +438,15 @@ export async function renderMarkPdf(
     stream.on('finish', resolve)
     stream.on('error', reject)
 
-    // 页集合 = 图片页 ∪ 批注页
-    const pageSet = new Set<number>(input.pageImages.keys())
-    for (const a of annotations) pageSet.add(a.pageNo || 1)
-    if (pageSet.size === 0) pageSet.add(1)
-    const pageNos = Array.from(pageSet).sort((a, b) => a - b)
-    const firstImg = Array.from(input.pageImages.values())[0]
-
-    let totalGet = 0
-    let totalFull = 0
-    for (const a of annotations) {
-      totalGet += a.getScore
-      totalFull += a.fullScore
-    }
+    const { pageNos, firstImg, totalGet, totalFull } = pageStats(input, annotations)
 
     pageNos.forEach((pageNo, idx) => {
       if (idx > 0) doc.addPage({ size: [A4_W, A4_H], margin: 0 })
-      // 背景白
       doc.rect(0, 0, A4_W, A4_H).fill('#ffffff')
 
-      // 当前页图片（无则用第一张兜底）
       const pg = input.pageImages.get(pageNo) || firstImg
       const rect = pg ? fitRect(pg.w, pg.h) : fitRect(0, 0)
 
-      // 图片
       if (pg && fs.existsSync(pg.path)) {
         try {
           doc.image(pg.path, rect.x, rect.y, { width: rect.w, height: rect.h })
@@ -282,7 +457,6 @@ export async function renderMarkPdf(
         doc.rect(rect.x, rect.y, rect.w, rect.h).fill('#f3f4f6')
       }
 
-      // 页面分数汇总
       const list = annotations.filter((a) => (a.pageNo || 1) === pageNo)
       let pageGetSum = 0
       let pageFullSum = 0
@@ -290,37 +464,11 @@ export async function renderMarkPdf(
         pageGetSum += a.getScore
         pageFullSum += a.fullScore
       }
-      drawScoreTag(doc, pageNo, pageGetSum, pageFullSum, totalGet, totalFull)
-
-      // 每题框 + 判分符号
-      for (const a of list) {
-        const { bx, by, bw, bh, markSize, mx, my } = annotationRect(rect, a)
-
-        doc.save()
-        doc.lineWidth(1.2)
-        doc.strokeColor(COLORS.box)
-        doc.roundedRect(bx, by, bw, bh, 4).stroke()
-        // 浅填充
-        doc.roundedRect(bx, by, bw, bh, 4)
-        doc.fillOpacity(0.06).fill(COLORS.box)
-        doc.restore()
-
-        // 判分符号绘制在框右上角内侧
-        drawJudgeMark(doc, a.judgeType, mx, my, markSize)
-
-        // 得分标注
-        doc
-          .fontSize(9)
-          .fillColor(COLORS.scoreBg)
-          .font(F_BOLD)
-          .text(`${a.getScore}/${a.fullScore}`, bx + 4, by + bh + 2, {
-            width: bw - 8,
-            align: 'right',
-          })
-
-        // 答案/解析回填（有空白写空白处，没空白写在标记旁）
-        drawBackfill(doc, rect, a)
+      if (layers.banner) {
+        drawBanner(doc, input.meta, pageNo, pageNos.length, pageGetSum, pageFullSum, totalGet, totalFull)
       }
+
+      drawPageAnnotations(doc, rect, list, layers, { withBoxes: true, withBackfill: true })
     })
 
     doc.end()
@@ -328,17 +476,16 @@ export async function renderMarkPdf(
 }
 
 /**
- * 渲染【纯标记层】PDF：
+ * 渲染【纯标记层】PDF（可开答案/错因/解析，默认错因+答案开）：
  * - 透明背景（可叠加在原卷上打印）
- * - 不含原图、不含题框、不含题目文字
- * - 只有：判分符号（√ / × / 勾上叉）+ 每题得分 + 右上角分数
- * - 坐标与批注 PDF 完全一致，叠加打印可对位
+ * - 只有标记类内容：判分符号 + 每空标记 + 得分 + 分数条 + （可选）回填文本
  */
 export async function renderMarksOnlyPdf(
   outPath: string,
   input: RenderMarkInput,
   annotations: any[]
 ): Promise<void> {
+  const layers = normalizeLayers(input.layers)
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: [A4_W, A4_H], margin: 0 })
     registerCjk(doc)
@@ -347,27 +494,15 @@ export async function renderMarksOnlyPdf(
     stream.on('finish', resolve)
     stream.on('error', reject)
 
-    const pageSet = new Set<number>(input.pageImages.keys())
-    for (const a of annotations) pageSet.add(a.pageNo || 1)
-    if (pageSet.size === 0) pageSet.add(1)
-    const pageNos = Array.from(pageSet).sort((a, b) => a - b)
-    const firstImg = Array.from(input.pageImages.values())[0]
-
-    let totalGet = 0
-    let totalFull = 0
-    for (const a of annotations) {
-      totalGet += a.getScore
-      totalFull += a.fullScore
-    }
+    const { pageNos, firstImg, totalGet, totalFull } = pageStats(input, annotations)
 
     pageNos.forEach((pageNo, idx) => {
       if (idx > 0) doc.addPage({ size: [A4_W, A4_H], margin: 0 })
-      // 注意：不画白色背景 → 页面保持透明，打印时只有标记会落墨
+      // 不画白色背景 → 页面保持透明，打印时只有标记会落墨
 
       const pg = input.pageImages.get(pageNo) || firstImg
       const rect = pg ? fitRect(pg.w, pg.h) : fitRect(0, 0)
 
-      // 右上角分数（属于批改标记）
       const list = annotations.filter((a) => (a.pageNo || 1) === pageNo)
       let pageGetSum = 0
       let pageFullSum = 0
@@ -375,21 +510,12 @@ export async function renderMarksOnlyPdf(
         pageGetSum += a.getScore
         pageFullSum += a.fullScore
       }
-      drawScoreTag(doc, pageNo, pageGetSum, pageFullSum, totalGet, totalFull)
-
-      // 只画判分符号 + 得分数字（无题框、无图片、无题目）
-      for (const a of list) {
-        const { bx, by, bw, bh, markSize, mx, my } = annotationRect(rect, a)
-        drawJudgeMark(doc, a.judgeType, mx, my, markSize)
-        doc
-          .fontSize(9)
-          .fillColor(COLORS.scoreBg)
-          .font(F_BOLD)
-          .text(`${a.getScore}/${a.fullScore}`, bx + 4, by + bh + 2, {
-            width: bw - 8,
-            align: 'right',
-          })
+      if (layers.banner) {
+        drawBanner(doc, input.meta, pageNo, pageNos.length, pageGetSum, pageFullSum, totalGet, totalFull)
       }
+
+      // 纯标记层：无题框无原图；标记类内容（含回填文本）按图层开关绘制
+      drawPageAnnotations(doc, rect, list, layers, { withBoxes: false, withBackfill: true })
     })
 
     doc.end()
@@ -467,7 +593,7 @@ export async function renderParsePdf(
       doc.font(F_BOLD).fontSize(12).fillColor('#111827').text(`${i + 1}. ${a.questionText}  (${a.getScore}/${a.fullScore})`, 48, y, { width: A4_W - 96 })
       y = doc.y + 2
       if (a.briefReason) {
-        doc.font(F_REG).fontSize(10).fillColor('#b45309').text(`点评：${cleanSolutionText(a.briefReason)}`, 64, y, { width: A4_W - 112 })
+        doc.font(F_REG).fontSize(10).fillColor('#b45309').text(`错在哪步：${cleanReasonText(a.briefReason)}`, 64, y, { width: A4_W - 112 })
         y = doc.y + 2
       }
       doc.font(F_REG).fontSize(11).fillColor('#1f2937').text(`解析：${cleanSolutionText(a.fullSolution) || '—'}`, 64, y, { width: A4_W - 112 })
@@ -479,7 +605,10 @@ export async function renderParsePdf(
 }
 
 /** 生成指定 task 的四类 PDF（批注/标记层/答案/解析），写回 files 表 */
-export async function generateTaskPdfs(taskId: string): Promise<{
+export async function generateTaskPdfs(
+  taskId: string,
+  layerOverride?: any
+): Promise<{
   mark: string
   marks: string
   answer: string
@@ -490,6 +619,14 @@ export async function generateTaskPdfs(taskId: string): Promise<{
     include: { annotations: true, files: true },
   })
   if (!task) throw new Error('task not found')
+
+  // 图层优先级：调用方显式传入 > 用户默认配置（configJson.layers）
+  let layers = normalizeLayers(undefined)
+  try {
+    const user = await db.user.findUnique({ where: { id: task.userId } })
+    layers = normalizeLayers(JSON.parse(user?.configJson || '{}').layers)
+  } catch {}
+  if (layerOverride) layers = normalizeLayers({ ...layers, ...layerOverride })
 
   // 按页组织原图
   const pageImages = new Map<number, PageImage>()
@@ -512,7 +649,18 @@ export async function generateTaskPdfs(taskId: string): Promise<{
   const answerPath = path.join(pdfRoot, `${taskId}-answer.pdf`)
   const parsePath = path.join(pdfRoot, `${taskId}-parse.pdf`)
 
-  const input: RenderMarkInput = { taskId, pageImages, annotations: task.annotations }
+  const meta = {
+    paperName: task.paperName,
+    studentName: task.studentName,
+    printDate: new Date(),
+  }
+  const input: RenderMarkInput = {
+    taskId,
+    pageImages,
+    annotations: task.annotations,
+    meta,
+    layers,
+  }
   await renderMarkPdf(markPath, input, task.annotations)
   await renderMarksOnlyPdf(marksPath, input, task.annotations)
   await renderAnswerPdf(answerPath, task.paperName, task.annotations)

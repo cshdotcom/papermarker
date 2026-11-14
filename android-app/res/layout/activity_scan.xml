@@ -37,9 +37,20 @@
             android:layout_weight="1" />
 
         <TextView
+            android:id="@+id/btnBurst"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_circle_btn"
+            android:padding="10dp"
+            android:text="连拍 关"
+            android:textColor="@color/white"
+            android:textSize="13sp" />
+
+        <TextView
             android:id="@+id/btnTorch"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
             android:background="@drawable/bg_circle_btn"
             android:padding="10dp"
             android:text="闪光"
@@ -171,7 +182,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:gravity="center"
-            android:text="拍照后自动检测纸张边缘，可拖动四角矫正 · 点击缩略图删除该页"
+            android:text="拍照后自动检测纸张边缘可矫正 · 开启连拍直接整张入列 · 点击或长按缩略图删除该页"
             android:textColor="#8A9199"
             android:textSize="11sp" />
     </LinearLayout>

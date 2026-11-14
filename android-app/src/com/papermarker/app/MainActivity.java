@@ -39,7 +39,8 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        if (Prefs.getToken(this).isEmpty() || Prefs.getBase(this).isEmpty()) {
+        // API Key 模式下 token 恒为空，必须用 hasCredential（token 或 apiKey 任一存在即可）
+        if (!Prefs.hasCredential(this) || Prefs.getBase(this).isEmpty()) {
             startActivity(new Intent(this, LoginActivity.class));
             finish();
             return;
@@ -51,7 +52,7 @@ public class MainActivity extends Activity {
         adapter = new TaskAdapter();
         list.setAdapter(adapter);
 
-        tvUser.setText(Prefs.getUsername(this) + " @ " + Prefs.getBase(this));
+        tvUser.setText(displayUsername() + " @ " + Prefs.getBase(this));
 
         Button btnScan = findViewById(R.id.btnScan);
         Button btnRefresh = findViewById(R.id.btnRefresh);
@@ -75,7 +76,7 @@ public class MainActivity extends Activity {
                 new AlertDialog.Builder(MainActivity.this)
                         .setTitle("设置")
                         .setMessage("当前服务端：" + Prefs.getBase(MainActivity.this)
-                                + "\n账号：" + Prefs.getUsername(MainActivity.this))
+                                + "\n账号：" + displayUsername())
                         .setPositiveButton("退出登录", new DialogInterface.OnClickListener() {
                             @Override
                             public void onClick(DialogInterface d, int w) {
@@ -93,7 +94,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        if (Prefs.getToken(this).isEmpty()) {
+        // 同 onCreate：API Key 登录时 token 为空，不能只看 token
+        if (!Prefs.hasCredential(this)) {
             startActivity(new Intent(this, LoginActivity.class));
             finish();
             return;
@@ -105,6 +107,12 @@ public class MainActivity extends Activity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQ_SCAN) loadTasks();
+    }
+
+    /** 显示用用户名：API Key 模式下为空时兜底显示 */
+    private String displayUsername() {
+        String u = Prefs.getUsername(this);
+        return (u == null || u.isEmpty()) ? "API Key 连接" : u;
     }
 
     private void loadTasks() {

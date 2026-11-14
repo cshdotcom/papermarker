@@ -2,10 +2,17 @@
 
 import { useState } from 'react'
 import { ImageOff } from 'lucide-react'
-import { fileUrl, type Annotation } from '@/lib/pm'
+import { fileUrl, type Annotation, type BlankInfo } from '@/lib/pm'
 import { usePm } from '@/lib/pm-store'
 import { JudgeMarkIcon } from './judge-icons'
-import { computeBackfill, truncateForBeside, cleanAnswerText, cleanSolutionText } from '@/lib/answer-layout'
+import {
+  computeBackfill,
+  computeBlankMarks,
+  truncateForBeside,
+  cleanAnswerText,
+  cleanSolutionText,
+  cleanReasonText,
+} from '@/lib/answer-layout'
 
 export interface OverlayPage {
   pageNo: number
@@ -21,7 +28,7 @@ interface Props {
 }
 
 /**
- * 复核叠加层：题框 / 判分标记（矢量 ⍻）/ 得分 / 答案与解析回填预览。
+ * 复核叠加层 v2：题框 / 小号判分标记（矢量⍻）/ 每空小标记 / 小得分 / 答案·错因·解析回填预览。
  * 答案回填与批注 PDF、Brother JPEG 使用同一套布局算法（answer-layout.ts），
  * 界面所见 = 打印所得。
  */
@@ -34,30 +41,31 @@ export function AnnotationOverlay({ page, annotations, pageScore }: Props) {
 
   return (
     <div className="flex flex-col gap-2">
-      {/* 图层开关 */}
-      <div className="flex flex-wrap items-center gap-2">
+      {/* 图层开关（v2：错因/解析独立开关，默认错因+答案开） */}
+      <div className="flex flex-wrap items-center gap-1.5">
         <span className="text-xs font-medium text-muted-foreground">图层：</span>
         {([
-          ['boxes', '题框'],
           ['marks', '判分标记'],
           ['scores', '得分'],
-          ['answers', '答案/解析回填'],
+          ['answers', '答案'],
+          ['reason', '错因'],
+          ['solution', '解析'],
+          ['boxes', '题框'],
         ] as const).map(([k, label]) => (
           <button
             key={k}
             onClick={() => toggleLayer(k)}
-            className={`rounded-full border px-2.5 py-1 text-xs transition ${
+            className={`rounded-full border px-2 py-0.5 text-[11px] transition ${
               layers[k]
                 ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
                 : 'border-muted text-muted-foreground'
             }`}
           >
-            {layers[k] ? '● ' : '○ '}
-            {label}
+            {layers[k] ? '●' : '○'} {label}
           </button>
         ))}
         {pageScore && (
-          <span className="ml-auto rounded-full bg-slate-900 px-2.5 py-1 text-xs font-semibold text-white">
+          <span className="ml-auto rounded-full bg-slate-900 px-2 py-0.5 text-[11px] font-semibold text-white">
             本页 {pageScore.get}/{pageScore.full}
           </span>
         )}
@@ -103,30 +111,30 @@ export function AnnotationOverlay({ page, annotations, pageScore }: Props) {
                   width: `${a.roi.w * 100}%`,
                   height: `${a.roi.h * 100}%`,
                   border: layers.boxes
-                    ? `2px solid ${selected ? (a.judgeType === 'correct' ? '#16a34a' : a.judgeType === 'wrong' ? '#dc2626' : '#d97706') : 'rgba(37,99,235,0.65)'}`
-                    : '2px solid transparent',
-                  backgroundColor: selected ? 'rgba(16,185,129,0.08)' : 'rgba(37,99,235,0.04)',
+                    ? `1.5px solid ${selected ? (a.judgeType === 'correct' ? '#16a34a' : a.judgeType === 'wrong' ? '#dc2626' : '#d97706') : 'rgba(37,99,235,0.6)'}`
+                    : '1.5px solid transparent',
+                  backgroundColor: selected ? 'rgba(16,185,129,0.08)' : 'transparent',
                   boxShadow: selected ? '0 0 0 2px rgba(16,185,129,0.5)' : 'none',
                 }}
               >
-                {/* 题号 */}
+                {/* 题号（题框开时显示） */}
                 <span
-                  className="absolute -top-2 left-1 rounded bg-slate-800 px-1 text-[10px] leading-4 text-white"
+                  className="absolute -top-2 left-1 rounded bg-slate-800 px-1 text-[9px] leading-4 text-white"
                   style={{ display: layers.boxes ? 'block' : 'none' }}
                 >
-                  {a.questionText?.slice(0, 12) || '题'}
+                  {a.questionText?.slice(0, 10) || '题'}
                 </span>
 
-                {/* 判分标记 右上角（矢量 ⍻） */}
+                {/* 题级判分标记：右上角（v2 小号矢量 ⍻） */}
                 {layers.marks && (
-                  <div className="absolute right-0.5 top-0.5 rounded bg-white/85 p-0.5">
-                    <JudgeMarkIcon type={a.judgeType} size={20} />
+                  <div className="absolute right-0.5 top-0.5 rounded bg-white/80 p-[1px]">
+                    <JudgeMarkIcon type={a.judgeType} size={14} strokeWidth={2.6} />
                   </div>
                 )}
 
-                {/* 得分 左下 */}
+                {/* 每题得分：左下角小字（v2 更小） */}
                 {layers.scores && (
-                  <div className="absolute bottom-0.5 left-1 rounded bg-slate-900/80 px-1 text-[10px] font-semibold text-white">
+                  <div className="absolute bottom-0 left-0.5 rounded bg-slate-900/75 px-1 text-[9px] font-semibold leading-4 text-white">
                     {a.getScore}/{a.fullScore}
                   </div>
                 )}
@@ -134,16 +142,108 @@ export function AnnotationOverlay({ page, annotations, pageScore }: Props) {
             )
           })}
 
-        {/* 答案/解析回填预览（页面级坐标，与 PDF 同一套布局算法，不随题框缩放） */}
+        {/* 每空小标记（v2：小√×⍻ + 小得分 + 空内答案，贴在空旁的小空位） */}
         {imgLoaded &&
-          layers.answers &&
-          annotations.map((a) => <BackfillPreview key={`bf-${a.id}`} annotation={a} onSelect={() => setSelected(a.id)} />)}
+          layers.marks &&
+          annotations.map((a) => (
+            <BlankMarksLayer
+              key={`bm-${a.id}`}
+              blanks={a.blanks}
+              showScores={layers.scores}
+              showAnswers={layers.answers}
+              onSelect={() => setSelected(a.id)}
+            />
+          ))}
+
+        {/* 答案/错因/解析回填预览（页面级坐标，与 PDF 同一套布局算法，不随题框缩放） */}
+        {imgLoaded &&
+          annotations.map((a) => (
+            <BackfillPreview key={`bf-${a.id}`} annotation={a} onSelect={() => setSelected(a.id)} />
+          ))}
       </div>
     </div>
   )
 }
 
-/** 答案/解析回填预览：复用 answer-layout 算法（页面级相对坐标），位置与打印输出一致 */
+/** 每空小标记层 */
+function BlankMarksLayer({
+  blanks,
+  showScores,
+  showAnswers,
+  onSelect,
+}: {
+  blanks: BlankInfo[] | null
+  showScores: boolean
+  showAnswers: boolean
+  onSelect: () => void
+}) {
+  if (!blanks || blanks.length === 0) return null
+  const marks = computeBlankMarks(
+    blanks.map((b) => ({
+      roiX: b.roiX,
+      roiY: b.roiY,
+      roiW: b.roiW,
+      roiH: b.roiH,
+      judge: b.judge,
+      getScore: b.getScore,
+      fullScore: b.fullScore,
+      answerText: b.answerText,
+    }))
+  )
+  if (marks.length === 0) return null
+
+  return (
+    <>
+      {marks.map((m, i) => (
+        <div key={i}>
+          {/* 小标记 + 小得分（空右侧，不占空间） */}
+          <div
+            onClick={(e) => {
+              e.stopPropagation()
+              onSelect()
+            }}
+            className="absolute flex -translate-y-1/2 -translate-x-1/2 cursor-pointer items-center gap-0.5"
+            style={{
+              left: `${m.cx * 100}%`,
+              top: `${m.cy * 100}%`,
+            }}
+          >
+            <div className="rounded-sm bg-white/80 p-[1px]">
+              <JudgeMarkIcon type={m.judge} size={11} strokeWidth={3} />
+            </div>
+            {showScores && m.scoreText && (
+              <span className="rounded-sm bg-slate-900/75 px-0.5 text-[8px] font-semibold leading-3 text-white">
+                {m.scoreText}
+              </span>
+            )}
+          </div>
+          {/* 空内正确答案（错/半对的空，小字居中） */}
+          {showAnswers && m.answerText && (
+            <div
+              onClick={(e) => {
+                e.stopPropagation()
+                onSelect()
+              }}
+              className="pointer-events-none absolute flex -translate-y-1/2 items-center justify-center px-0.5"
+              style={{
+                left: `${m.box.x * 100}%`,
+                top: `${(m.box.y + m.box.h / 2) * 100}%`,
+                width: `${m.box.w * 100}%`,
+                height: `${m.box.h * 100}%`,
+              }}
+            >
+              <span className="truncate text-[10px] font-bold leading-none text-emerald-700">
+                {m.answerText}
+              </span>
+            </div>
+          )}
+        </div>
+      ))}
+    </>
+  )
+}
+
+/** 答案/错因/解析回填预览：复用 answer-layout 算法（页面级相对坐标），位置与打印输出一致 */
 function BackfillPreview({
   annotation: a,
   onSelect,
@@ -151,6 +251,7 @@ function BackfillPreview({
   annotation: Annotation
   onSelect: () => void
 }) {
+  const { layers } = usePm()
   const plan = computeBackfill({
     roiX: a.roi.x,
     roiY: a.roi.y,
@@ -165,17 +266,20 @@ function BackfillPreview({
     briefReason: a.briefReason,
     judgeType: a.judgeType,
   })
-  if (!plan.answer && !plan.solution) return null
+  // 一题多空：答案已写入每个空内（BlankMarksLayer），跳过题级答案避免重复重叠
+  const hasBlanks = a.blanks && a.blanks.length > 0
+  if ((!plan.answer || hasBlanks) && !plan.solution && !plan.reason) return null
+  const beside = (m: string) => m === 'beside-mark' || m === 'inline'
 
   return (
     <>
-      {plan.answer && (
+      {layers.answers && plan.answer && !hasBlanks && (
         <div
           onClick={(e) => {
             e.stopPropagation()
             onSelect()
           }}
-          className="absolute flex cursor-pointer items-center overflow-hidden rounded bg-emerald-600/15 px-1 text-[10px] font-bold leading-tight text-emerald-700 ring-1 ring-emerald-600/25"
+          className="absolute flex cursor-pointer items-center overflow-hidden rounded bg-emerald-600/15 px-0.5 text-[10px] font-bold leading-tight text-emerald-700 ring-1 ring-emerald-600/25"
           style={{
             left: `${plan.answer.x * 100}%`,
             top: `${plan.answer.y * 100}%`,
@@ -185,15 +289,30 @@ function BackfillPreview({
         >
           <span className="truncate">
             答：
-            {plan.answer.mode === 'beside-mark' || plan.answer.mode === 'inline'
+            {beside(plan.answer.mode)
               ? truncateForBeside(cleanAnswerText(a.answerText), 12)
-              : cleanAnswerText(a.answerText)}
+              : truncateForBeside(cleanAnswerText(a.answerText), 24)}
           </span>
         </div>
       )}
-      {plan.solution && (
+      {layers.reason && plan.reason && (
         <div
-          className="pointer-events-none absolute flex items-center overflow-hidden px-1 text-[9px] leading-tight text-slate-500"
+          className="pointer-events-none absolute flex items-center overflow-hidden px-0.5 text-[9px] leading-tight text-amber-700"
+          style={{
+            left: `${plan.reason.x * 100}%`,
+            top: `${plan.reason.y * 100}%`,
+            width: `${plan.reason.w * 100}%`,
+            height: `${plan.reason.h * 100}%`,
+          }}
+        >
+          <span className="truncate">
+            错因：{truncateForBeside(cleanReasonText(a.briefReason), beside(plan.reason.mode) ? 18 : 30)}
+          </span>
+        </div>
+      )}
+      {layers.solution && plan.solution && (
+        <div
+          className="pointer-events-none absolute flex items-center overflow-hidden px-0.5 text-[9px] leading-tight text-slate-500"
           style={{
             left: `${plan.solution.x * 100}%`,
             top: `${plan.solution.y * 100}%`,
@@ -201,7 +320,9 @@ function BackfillPreview({
             height: `${plan.solution.h * 100}%`,
           }}
         >
-          <span className="truncate">析：{cleanSolutionText(a.fullSolution || a.briefReason).slice(0, 40)}</span>
+          <span className="truncate">
+            析：{truncateForBeside(cleanSolutionText(a.fullSolution || a.briefReason), beside(plan.solution.mode) ? 18 : 34)}
+          </span>
         </div>
       )}
     </>

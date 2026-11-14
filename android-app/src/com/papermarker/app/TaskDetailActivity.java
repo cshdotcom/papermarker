@@ -124,6 +124,8 @@ public class TaskDetailActivity extends Activity {
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
+                            // 先关掉初始的「加载任务…」弹窗，否则它会永远盖在页面上
+                            dismissPd();
                             renderHeader();
                             buildPageTabs();
                             buildQuestionList();
@@ -152,12 +154,21 @@ public class TaskDetailActivity extends Activity {
         }
     }
 
+    /** 安全读字符串：JSON 值为 null 时 org.json 的 optString 会返回字面量 "null"，这里统一过滤 */
+    private String optStrOrNull(JSONObject o, String key) {
+        if (o == null || o.isNull(key)) return "";
+        String v = o.optString(key, "");
+        if (v == null || v.length() == 0 || "null".equals(v)) return "";
+        return v;
+    }
+
     // ---------- 头部信息 ----------
 
     private void renderHeader() {
-        tvPaperName.setText(taskJson.optString("paperName", "未命名试卷"));
-        String student = taskJson.optString("studentName", "");
-        String date = taskJson.optString("createdAt", "");
+        tvPaperName.setText(optStrOrNull(taskJson, "paperName").isEmpty()
+                ? "未命名试卷" : optStrOrNull(taskJson, "paperName"));
+        String student = optStrOrNull(taskJson, "studentName");
+        String date = optStrOrNull(taskJson, "createdAt");
         String meta = (student.isEmpty() ? "" : student + " · ") + formatDate(date)
                 + " · " + (annotations == null ? 0 : annotations.length()) + " 题";
         tvMeta.setText(meta);
@@ -235,6 +246,7 @@ public class TaskDetailActivity extends Activity {
         }
 
         final String fid = fileId;
+        dismissPd(); // 先关旧弹窗，再显示新弹窗，避免旧 pd 被覆盖后永远无法关闭
         pd = ProgressDialog.show(this, "", "加载第 " + pageNo + " 页…", true, false);
         new Thread(new Runnable() {
             @Override
@@ -304,10 +316,10 @@ public class TaskDetailActivity extends Activity {
             }
             tvJudge.setText(judgeLabel);
             tvJudge.setTextColor(judgeColor);
-            tvQuestion.setText((i + 1) + ". " + a.optString("questionText", ""));
+            tvQuestion.setText((i + 1) + ". " + optStrOrNull(a, "questionText"));
             tvScoreQ.setText(a.optInt("getScore", 0) + "/" + a.optInt("fullScore", 0));
-            String reason = a.optString("briefReason", "");
-            if (reason != null && !reason.isEmpty() && !"null".equals(reason)) {
+            String reason = optStrOrNull(a, "briefReason");
+            if (!reason.isEmpty()) {
                 tvReason.setText("点评：" + reason);
                 tvReason.setVisibility(View.VISIBLE);
             }
@@ -347,6 +359,7 @@ public class TaskDetailActivity extends Activity {
     // ---------- IPP 打印 ----------
 
     private void doPrint(final String subType, final String label) {
+        dismissPd();
         pd = ProgressDialog.show(this, "", "正在下发 " + label + " 至打印机…", true, false);
         new Thread(new Runnable() {
             @Override
@@ -430,6 +443,7 @@ public class TaskDetailActivity extends Activity {
 
     private void openPdfFile(final String fileId) {
         currentPdfFileId = fileId;
+        dismissPd();
         pd = ProgressDialog.show(this, "", "下载 PDF…", true, false);
         new Thread(new Runnable() {
             @Override

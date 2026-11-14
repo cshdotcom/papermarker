@@ -54,11 +54,12 @@ public class CropView extends View {
         this.dragListener = l;
     }
 
-    /** 设置位图与四角（位图坐标），自动 fitCenter */
+    /** 设置位图与四角（位图坐标），自动 fitCenter；pts 会先经 normalizeQuad 校验 */
     public void setBitmap(Bitmap bmp, PointF[] pts) {
         this.bitmap = bmp;
-        if (pts == null) {
-            // 默认内缩 8%
+        PointF[] n = (pts == null) ? null : normalizeQuad(pts, bmp.getWidth(), bmp.getHeight());
+        if (n == null) {
+            // 默认内缩 8%（含传入四角校验失败时的兜底）
             float w = bmp.getWidth(), h = bmp.getHeight();
             float ix = w * 0.08f, iy = h * 0.08f;
             corners[0] = new PointF(ix, iy);
@@ -66,15 +67,60 @@ public class CropView extends View {
             corners[2] = new PointF(w - ix, h - iy);
             corners[3] = new PointF(ix, h - iy);
         } else {
-            for (int i = 0; i < 4; i++) corners[i] = new PointF(pts[i].x, pts[i].y);
+            for (int i = 0; i < 4; i++) corners[i] = new PointF(n[i].x, n[i].y);
         }
         requestLayout();
         invalidate();
     }
 
     public void setCorners(PointF[] pts) {
-        for (int i = 0; i < 4; i++) corners[i].set(pts[i].x, pts[i].y);
+        if (pts == null || bitmap == null) return;
+        PointF[] n = normalizeQuad(pts, bitmap.getWidth(), bitmap.getHeight());
+        if (n == null) return; // 检测失败/退化四边形：保持现有四角不变
+        for (int i = 0; i < 4; i++) corners[i].set(n[i].x, n[i].y);
         invalidate();
+    }
+
+    /**
+     * 校验并规范化四边形：
+     * 1. 每点 clamp 到 [8, bmpW-8] / [8, bmpH-8]，避免越界；
+     * 2. 按相对质心的角度升序排序为 TL,TR,BR,BL（屏幕坐标 y 向下，角度 -π→π 依次对应四个象限），修复乱序；
+     * 3. 鞋带公式面积 < 位图面积 15% 视为退化，返回 null。
+     */
+    public static PointF[] normalizeQuad(PointF[] pts, int bmpW, int bmpH) {
+        if (pts == null || pts.length != 4) return null;
+        float maxX = Math.max(8f, bmpW - 8f);
+        float maxY = Math.max(8f, bmpH - 8f);
+        PointF[] p = new PointF[4];
+        for (int i = 0; i < 4; i++) {
+            if (pts[i] == null) return null;
+            p[i] = new PointF(clamp(pts[i].x, 8f, maxX), clamp(pts[i].y, 8f, maxY));
+        }
+        // 质心
+        float cx = (p[0].x + p[1].x + p[2].x + p[3].x) / 4f;
+        float cy = (p[0].y + p[1].y + p[2].y + p[3].y) / 4f;
+        // 按相对质心的 atan2 角度升序：TL(-π..-π/2) TR(-π/2..0) BR(0..π/2) BL(π/2..π)
+        for (int i = 0; i < 4; i++) {
+            for (int j = i + 1; j < 4; j++) {
+                double ai = Math.atan2(p[i].y - cy, p[i].x - cx);
+                double aj = Math.atan2(p[j].y - cy, p[j].x - cx);
+                if (aj < ai) {
+                    PointF t = p[i];
+                    p[i] = p[j];
+                    p[j] = t;
+                }
+            }
+        }
+        // 鞋带公式面积，过小视为检测失败
+        double area = 0;
+        for (int i = 0; i < 4; i++) {
+            PointF a = p[i];
+            PointF b = p[(i + 1) % 4];
+            area += (double) a.x * b.y - (double) b.x * a.y;
+        }
+        area = Math.abs(area) / 2.0;
+        if (area < 0.15 * (double) bmpW * (double) bmpH) return null;
+        return p;
     }
 
     public PointF[] getCorners() {
@@ -93,9 +139,11 @@ public class CropView extends View {
         if (bitmap == null || getWidth() == 0) return;
         float sw = (float) getWidth() / bitmap.getWidth();
         float sh = (float) getHeight() / bitmap.getHeight();
-        scale = Math.min(sw, sh) * 0.96f;
-        offX = (getWidth() - bitmap.getWidth() * scale) / 2f;
-        offY = (getHeight() - bitmap.getHeight() * scale) / 2f;
+        // 0.88：留出边缘空隙，保证四角手柄（半径 22px）在纸张贴边时也完整可见
+        scale = Math.min(sw, sh) * 0.88f;
+        // 至少 48px 内边距（下限），避免手柄被屏幕/视图边缘裁掉
+        offX = Math.max(48f, (getWidth() - bitmap.getWidth() * scale) / 2f);
+        offY = Math.max(48f, (getHeight() - bitmap.getHeight() * scale) / 2f);
     }
 
     private float toScreenX(float bx) {
@@ -162,6 +210,8 @@ public class CropView extends View {
         if (bitmap == null) return false;
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN: {
+                // 拖动四角时不允许父布局（如 ScrollView）拦截事件
+                if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
                 float best = Float.MAX_VALUE;
                 activeIdx = -1;
                 for (int i = 0; i < 4; i++) {
@@ -173,8 +223,8 @@ public class CropView extends View {
                         activeIdx = i;
                     }
                 }
-                // 触控半径 72px
-                if (best > 72f * 72f) activeIdx = -1;
+                // 触控半径 96px（手机上更好按）
+                if (best > 96f * 96f) activeIdx = -1;
                 return true;
             }
             case MotionEvent.ACTION_MOVE: {

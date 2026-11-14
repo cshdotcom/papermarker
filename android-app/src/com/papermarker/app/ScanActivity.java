@@ -71,12 +71,16 @@ public class ScanActivity extends Activity {
     private boolean torchOn = false;
     private boolean cameraReady = false;
     private boolean capturing = false;
+    /** 拍照序号：保存成功/失败时自增，作废未触发的 2 秒兜底超时 */
+    private int captureSeq = 0;
+    /** 快速连拍模式：拍完不进裁切，直接整张入页列表 */
+    private boolean burstMode = false;
 
     // ---------- 页面数据 ----------
     private final ArrayList<String> pages = new ArrayList<>();       // 已矫正页面路径
     private final ArrayList<String> pendingCrop = new ArrayList<>(); // 相册导入待裁切队列
     private LinearLayout thumbs;
-    private TextView tvPageCount, btnTorch, btnGallery, btnUpload;
+    private TextView tvPageCount, btnTorch, btnBurst, btnGallery, btnUpload;
     private View btnShutter;
     private EditText etPaperName, etStudent;
     private ProgressDialog progressDialog;
@@ -138,6 +142,7 @@ public class ScanActivity extends Activity {
         thumbs = findViewById(R.id.thumbs);
         tvPageCount = findViewById(R.id.tvPageCount);
         btnTorch = findViewById(R.id.btnTorch);
+        btnBurst = findViewById(R.id.btnBurst);
         btnGallery = findViewById(R.id.btnGallery);
         btnUpload = findViewById(R.id.btnUpload);
         btnShutter = findViewById(R.id.btnShutter);
@@ -157,6 +162,12 @@ public class ScanActivity extends Activity {
             @Override
             public void onClick(View v) {
                 toggleTorch();
+            }
+        });
+        btnBurst.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                toggleBurst();
             }
         });
         btnGallery.setOnClickListener(new View.OnClickListener() {
@@ -349,6 +360,14 @@ public class ScanActivity extends Activity {
         applyTorch();
     }
 
+    /** 快速连拍开关：开启后拍照不入裁切，直接整张加入页面列表 */
+    private void toggleBurst() {
+        burstMode = !burstMode;
+        btnBurst.setText(burstMode ? "连拍 开" : "连拍 关");
+        Toast.makeText(this, burstMode ? "连拍已开启：拍照直接加入页面列表"
+                        : "连拍已关闭：拍照后进入边缘矫正", Toast.LENGTH_SHORT).show();
+    }
+
     private void closeCamera() {
         cameraReady = false;
         try {
@@ -389,6 +408,20 @@ public class ScanActivity extends Activity {
             cb.set(CaptureRequest.JPEG_ORIENTATION, sensorOrientation);
             session.stopRepeating();
             session.capture(cb.build(), null, cameraHandler);
+            // 2 秒兜底：ImageReader 回调未到（拍照失败）时恢复可拍，避免 capturing 永久卡死；
+            // 保存成功/失败时会自增 captureSeq 作废本次超时
+            final int seq = ++captureSeq;
+            cameraHandler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (seq == captureSeq) capturing = false;
+                        }
+                    });
+                }
+            }, 2000);
             // 恢复预览
             cameraHandler.postDelayed(new Runnable() {
                 @Override
@@ -402,7 +435,7 @@ public class ScanActivity extends Activity {
         }
     }
 
-    /** ImageReader 回调（相机线程）：JPEG 字节 → 临时文件 → 裁切 */
+    /** ImageReader 回调（相机线程）：JPEG 字节 → 临时文件 → 裁切或连拍入列 */
     private void saveCapture(ImageReader reader) {
         try {
             Image image = reader.acquireLatestImage();
@@ -419,21 +452,66 @@ public class ScanActivity extends Activity {
             fos.close();
 
             final String path = f.getAbsolutePath();
-            runOnUiThread(new Runnable() {
-                @Override
-                public void run() {
-                    capturing = false;
-                    launchCrop(path);
-                }
-            });
+            if (burstMode) {
+                // 连拍模式：相机线程内串行压缩（保证页序），不入裁切直接加入列表
+                final String out = compressForBurst(path);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        captureSeq++; // 已保存，作废兜底超时
+                        capturing = false;
+                        if (out != null) {
+                            pages.add(out);
+                            refreshUi();
+                            Toast.makeText(ScanActivity.this,
+                                    "已加入第 " + pages.size() + " 页（连拍模式）", Toast.LENGTH_SHORT).show();
+                        }
+                    }
+                });
+            } else {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        captureSeq++; // 已保存，作废兜底超时
+                        capturing = false;
+                        launchCrop(path);
+                    }
+                });
+            }
         } catch (final Throwable t) {
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
+                    captureSeq++; // 已失败，作废兜底超时
                     capturing = false;
                     Toast.makeText(ScanActivity.this, "保存照片失败：" + t.getMessage(), Toast.LENGTH_SHORT).show();
                 }
             });
+        }
+    }
+
+    /**
+     * 连拍模式：整张照片压缩到 1800 宽后存 cache（fast_时间戳.jpg），避免超大 JPEG 上传慢。
+     * 在相机线程调用（串行保证页序）；失败返回 null 并清理临时文件。
+     */
+    private String compressForBurst(final String shotPath) {
+        try {
+            Bitmap b = BitmapUtil.loadDownscaled(shotPath, 1800);
+            if (b == null) throw new Exception("图片解码失败");
+            File dest = new File(getCacheDir(), "fast_" + System.currentTimeMillis() + ".jpg");
+            BitmapUtil.saveJpeg(b, dest, 90);
+            b.recycle();
+            new File(shotPath).delete(); // 原始拍摄文件已消费，清理
+            return dest.getAbsolutePath();
+        } catch (final Throwable t) {
+            new File(shotPath).delete();
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    Toast.makeText(ScanActivity.this, "连拍保存失败：" + t.getMessage(), Toast.LENGTH_SHORT).show();
+                }
+            });
+            return null;
         }
     }
 
@@ -540,27 +618,38 @@ public class ScanActivity extends Activity {
             num.setGravity(android.view.Gravity.CENTER);
             cell.addView(num);
 
-            // 点击删除
+            // 点击 / 长按删除
             cell.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
-                    new AlertDialog.Builder(ScanActivity.this)
-                            .setTitle("删除本页")
-                            .setMessage("确定删除第 " + (idx + 1) + " 页？")
-                            .setPositiveButton("删除", new DialogInterface.OnClickListener() {
-                                @Override
-                                public void onClick(DialogInterface d, int w) {
-                                    new File(pages.get(idx)).delete();
-                                    pages.remove(idx);
-                                    refreshUi();
-                                }
-                            })
-                            .setNegativeButton("取消", null)
-                            .show();
+                    confirmDeletePage(idx);
+                }
+            });
+            cell.setOnLongClickListener(new View.OnLongClickListener() {
+                @Override
+                public boolean onLongClick(View v) {
+                    confirmDeletePage(idx);
+                    return true;
                 }
             });
             thumbs.addView(cell);
         }
+    }
+
+    private void confirmDeletePage(final int idx) {
+        new AlertDialog.Builder(ScanActivity.this)
+                .setTitle("删除本页")
+                .setMessage("确定删除第 " + (idx + 1) + " 页？")
+                .setPositiveButton("删除", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int w) {
+                        new File(pages.get(idx)).delete();
+                        pages.remove(idx);
+                        refreshUi();
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     // ---------- 上传 ----------

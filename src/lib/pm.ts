@@ -6,6 +6,15 @@ export type Layout = 'inplace' | 'separate'
 
 export interface RoiRect { x: number; y: number; w: number; h: number }
 
+/** 一题多空：每个小空的独立判分（VLM 识别） */
+export interface BlankInfo {
+  roi: RoiRect
+  judge: JudgeType
+  getScore: number
+  fullScore: number
+  answerText?: string | null
+}
+
 export interface Annotation {
   id: string
   pageNo: number
@@ -24,6 +33,46 @@ export interface Annotation {
   originGetScore: number | null
   /** 题目作答空白区（VLM 识别，可能为空） */
   answerRoi: RoiRect | null
+  /** 一题多空：每个空的独立判分（可能为空） */
+  blanks: BlankInfo[] | null
+}
+
+/** 标记层开关（复核界面 / 批注 PDF / 标记层 PDF / Brother JPEG 四端共用） */
+export interface MarkLayers {
+  /** 判分符号 √ × ⍻ */
+  marks: boolean
+  /** 每题得分 */
+  scores: boolean
+  /** 答案回填（默认开） */
+  answers: boolean
+  /** 错因/错在哪步（默认开） */
+  reason: boolean
+  /** 完整解析（默认关，可开） */
+  solution: boolean
+  /** 题框 */
+  boxes: boolean
+  /** 顶部宽分数条（练习名/姓名得分/打印日期） */
+  banner: boolean
+}
+
+export const DEFAULT_MARK_LAYERS: MarkLayers = {
+  marks: true,
+  scores: true,
+  answers: true,
+  reason: true,
+  solution: false,
+  boxes: true,
+  banner: true,
+}
+
+export function normalizeLayers(raw: any): MarkLayers {
+  const l = { ...DEFAULT_MARK_LAYERS }
+  if (raw && typeof raw === 'object') {
+    for (const k of Object.keys(DEFAULT_MARK_LAYERS) as (keyof MarkLayers)[]) {
+      if (typeof raw[k] === 'boolean') l[k] = raw[k]
+    }
+  }
+  return l
 }
 
 export interface TaskSummary {
@@ -125,11 +174,29 @@ export function setStoredToken(token: string | null, remember = true) {
   } catch {}
 }
 
-function getStoredToken(): string | null {
+export function getStoredToken(): string | null {
   try {
     return localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY)
   } catch {
     return null
+  }
+}
+
+const USERNAME_KEY = 'pm_username'
+
+/** 登录成功后缓存用户名，下次打开免闪屏直接渲染主界面 */
+export function setCachedUsername(u: string) {
+  try {
+    if (u) localStorage.setItem(USERNAME_KEY, u)
+    else localStorage.removeItem(USERNAME_KEY)
+  } catch {}
+}
+
+export function getCachedUsername(): string {
+  try {
+    return localStorage.getItem(USERNAME_KEY) || ''
+  } catch {
+    return ''
   }
 }
 
@@ -179,7 +246,10 @@ export const api = {
         body: JSON.stringify({ username, password, remember }),
       }
     )
-    if (r?.token) setStoredToken(r.token, remember)
+    if (r?.token) {
+      setStoredToken(r.token, remember)
+      setCachedUsername(r?.user?.username || username.trim())
+    }
     return r
   },
   changePassword: (oldPassword: string, newPassword: string) =>
@@ -189,11 +259,21 @@ export const api = {
     }),
   logout: () => {
     setStoredToken(null)
+    setCachedUsername('')
     try {
       document.cookie = 'pm_token=; Path=/; Max-Age=0'
     } catch {}
   },
-  me: () => jfetch<{ user: { id: string; username: string } }>('/api/auth/me'),
+  me: () =>
+    jfetch<{
+      user: { id: string; username: string }
+      config?: { layers?: Partial<MarkLayers> }
+    }>('/api/auth/me'),
+  saveLayerConfig: (layers: Partial<MarkLayers>) =>
+    jfetch<{ code: number; layers: MarkLayers }>('/api/auth/config', {
+      method: 'PUT',
+      body: JSON.stringify({ layers }),
+    }),
   listTasks: () => jfetch<{ tasks: TaskSummary[] }>('/api/tasks'),
   getTask: (id: string) =>
     jfetch<{ task: TaskDetail }>(`/api/tasks/${id}`, { timeoutMs: 20000 }),
@@ -208,8 +288,11 @@ export const api = {
   getPrinter: () => jfetch<{ config: PrinterConfig }>('/api/printer/config'),
   savePrinter: (cfg: Partial<PrinterConfig>) =>
     jfetch('/api/printer/config', { method: 'PUT', body: JSON.stringify(cfg) }),
-  generatePdf: (taskId: string) =>
-    jfetch('/api/pdf/generate', { method: 'POST', body: JSON.stringify({ taskId }) }),
+  generatePdf: (taskId: string, layers?: Partial<MarkLayers>) =>
+    jfetch('/api/pdf/generate', {
+      method: 'POST',
+      body: JSON.stringify({ taskId, layers }),
+    }),
   // 扫描相关
   getScanner: () => jfetch<{ config: ScannerConfig }>('/api/scanner/config'),
   saveScanner: (cfg: Partial<ScannerConfig>) =>

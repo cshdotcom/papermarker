@@ -1,14 +1,10 @@
 import { create } from 'zustand'
-import type { TaskDetail } from './pm'
+import type { TaskDetail, MarkLayers } from './pm'
+import { DEFAULT_MARK_LAYERS } from './pm'
 
 export type View = 'dashboard' | 'review' | 'settings' | 'scan'
 
-interface Layers {
-  boxes: boolean
-  marks: boolean
-  scores: boolean
-  answers: boolean
-}
+export type Layers = MarkLayers
 
 interface PmState {
   view: View
@@ -29,6 +25,7 @@ interface PmState {
   logout: () => void
   setTaskDetail: (t: TaskDetail | null) => void
   toggleLayer: (k: keyof Layers) => void
+  setLayers: (l: Partial<Layers>) => void
   setSelected: (id: string | null) => void
   pushPendingScanFiles: (files: File[]) => void
   consumePendingScanFiles: () => File[]
@@ -38,9 +35,9 @@ export const usePm = create<PmState>((set, get) => ({
   view: 'dashboard',
   currentTaskId: null,
   authed: false,
-  authLoading: true,
+  authLoading: false,
   username: '',
-  layers: { boxes: true, marks: true, scores: true, answers: false },
+  layers: { ...DEFAULT_MARK_LAYERS },
   taskDetail: null,
   selectedAnnotationId: null,
   pendingScanFiles: [],
@@ -60,6 +57,7 @@ export const usePm = create<PmState>((set, get) => ({
     }),
   setTaskDetail: (t) => set({ taskDetail: t }),
   toggleLayer: (k) => set((s) => ({ layers: { ...s.layers, [k]: !s.layers[k] } })),
+  setLayers: (l) => set((s) => ({ layers: { ...s.layers, ...l } })),
   setSelected: (id) => set({ selectedAnnotationId: id }),
   pushPendingScanFiles: (files) =>
     set((s) => ({ pendingScanFiles: [...s.pendingScanFiles, ...files] })),

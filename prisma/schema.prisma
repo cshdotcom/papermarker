@@ -109,6 +109,8 @@ model Annotation {
   answerRoiY      Float?
   answerRoiW      Float?
   answerRoiH      Float?
+  // 一题多空：每个小空的独立判分（JSON 数组 [{roi,judge,getScore,fullScore,answerText}]，可空）
+  blanksJson      String?
   createdAt       DateTime      @default(now())
 }
 

@@ -5,13 +5,12 @@ import {
   CheckCircle2,
   Settings as SettingsIcon,
   LayoutDashboard,
-  Loader2,
-  LogOut,
   PenLine,
   ScanLine,
+  LogOut,
 } from 'lucide-react'
 import { usePm } from '@/lib/pm-store'
-import { api } from '@/lib/pm'
+import { api, getStoredToken, getCachedUsername, normalizeLayers } from '@/lib/pm'
 import { Dashboard } from '@/components/pm/dashboard'
 import { Review } from '@/components/pm/review'
 import { Settings } from '@/components/pm/settings'
@@ -19,72 +18,112 @@ import { ScanView } from '@/components/pm/scan/scan-view'
 import { LoginView } from '@/components/pm/login-view'
 import { Button } from '@/components/ui/button'
 
+/**
+ * 启动骨架（与主界面同构）：避免「检查登录中→主界面」的闪屏。
+ * 仅在首帧（SSR/水合）出现，token 存在时下一帧即为主界面。
+ */
+function BootSkeleton() {
+  return (
+    <div className="flex min-h-screen flex-col bg-muted/20">
+      <header className="sticky top-0 z-30 border-b bg-background/95">
+        <div className="mx-auto flex h-14 max-w-7xl items-center gap-3 px-4">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-600">
+            <PenLine className="h-4 w-4 text-white" />
+          </div>
+          <div className="h-4 w-28 animate-pulse rounded bg-muted" />
+          <div className="ml-auto h-8 w-40 animate-pulse rounded bg-muted" />
+        </div>
+      </header>
+      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6">
+        <div className="h-48 animate-pulse rounded-xl bg-muted" />
+      </main>
+    </div>
+  )
+}
+
 export default function Home() {
   const {
     view,
     setView,
     authed,
-    authLoading,
-    setAuthed,
-    setAuthLoading,
     username,
     setUsername,
+    setAuthed,
+    setLayers,
     logout,
     openTask,
     currentTaskId,
   } = usePm()
 
-  const [bootError, setBootError] = useState<string | null>(null)
+  // 首帧（与 SSR 一致）显示骨架；挂载后同步读取本地 token 立即定向
+  const [mounted, setMounted] = useState(false)
+  const [hasToken, setHasToken] = useState(false)
 
-  // 启动：仅校验已有登录态（localStorage token / cookie），不自动登录
   useEffect(() => {
-    let mounted = true
+    // 1) 同步判定：有 token → 直接进主界面（乐观渲染，无闪屏）
+    const token = getStoredToken()
+    const cached = getCachedUsername()
+    setHasToken(!!token)
+    setMounted(true)
+    if (token) {
+      setAuthed(true)
+      if (cached) setUsername(cached)
+    }
+
+    // 2) 后台静默校验：过期则回登录页；成功则同步服务端图层默认配置
+    if (!token) return
+    let alive = true
     ;(async () => {
-      setAuthLoading(true)
       try {
-        const me = await api.me().catch(() => null)
-        if (me?.user && mounted) {
-          setAuthed(true)
-          setUsername(me.user.username)
-        } else if (mounted) {
+        const me = await api.me()
+        if (!alive) return
+        setAuthed(true)
+        setUsername(me.user.username)
+        if (me.config?.layers) setLayers(normalizeLayers(me.config.layers))
+      } catch {
+        // token 失效 / 网络异常：仅在校验确凿失败（401 等）时回登录
+        if (alive) {
           setAuthed(false)
+          try {
+            localStorage.removeItem('pm_token')
+            sessionStorage.removeItem('pm_token')
+          } catch {}
         }
-      } finally {
-        if (mounted) setAuthLoading(false)
       }
     })()
     return () => {
-      mounted = false
+      alive = false
     }
-  }, [setAuthed, setAuthLoading, setUsername])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const doLogout = () => {
     api.logout()
     logout()
   }
 
-  if (authLoading) {
+  // 首帧（SSR / 水合前）：显示与主界面同构的骨架，不闪屏
+  if (!mounted) return <BootSkeleton />
+
+  // 无 token：直接登录页（不经过任何加载态）
+  if (!authed && !hasToken) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-muted/30">
-        <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
-        <p className="text-sm text-muted-foreground">正在检查登录状态…</p>
-      </div>
+      <LoginView
+        onLogin={(u) => {
+          setHasToken(true)
+          setAuthed(true)
+          setUsername(u)
+        }}
+      />
     )
   }
 
-  if (bootError) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-3">
-        <p className="text-sm text-destructive">{bootError}</p>
-      </div>
-    )
-  }
-
-  // 未登录：登录门禁页
+  // token 校验失败（authed 被后台置 false）
   if (!authed) {
     return (
       <LoginView
         onLogin={(u) => {
+          setHasToken(true)
           setAuthed(true)
           setUsername(u)
         }}

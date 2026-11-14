@@ -12,6 +12,13 @@ export interface RoiRect {
   w: number
   h: number
 }
+export interface AiBlank {
+  roi: RoiRect
+  judge: JudgeType
+  getScore: number
+  fullScore: number
+  answerText?: string | null
+}
 export interface AiQuestion {
   pageNo: number
   questionText: string
@@ -25,6 +32,8 @@ export interface AiQuestion {
   answerText: string
   /** 题目作答空白区（用于答案回填），可为空 */
   answerRoi?: RoiRect | null
+  /** 一题多空：每个小空的独立判分，可为空 */
+  blanks?: AiBlank[] | null
 }
 export interface AiGradeResult {
   paperName: string
@@ -43,6 +52,8 @@ const SYSTEM_PROMPT = `你是一名严谨、有经验的阅卷老师。请分析
 4. 统计试卷总分与得分。
 5. 每题标注所在页码 pageNo（第几张图片即为第几页）。
 6. 若题目下方/旁边有学生作答的空白区域，给出 answerRoi（该空白区域的相对坐标）；题目没有空白位置（如选择题）则省略 answerRoi。答案回填时优先写入该空白处。
+7. 【一题多空】填空题/计算题含多个小空（横线、括号、方框）时，必须在 blanks 数组中给出每一个小空的独立判分：每个空的相对坐标 roi（尽量精确到空本身）、该空对错 judge、该空得分 getScore/满分 fullScore、该空正确答案 answerText。单个空的题目若已给出 answerRoi 可省略 blanks。
+8. 【错在哪步】学生答错时，briefReason 必须写清楚具体错在哪一步（如“第二步移项符号出错，应为 -6 而写了 +6”），不要只写“计算错误”。
 
 严格只返回 JSON（不要 markdown 代码块、不要解释文字），结构如下：
 {
@@ -56,6 +67,9 @@ const SYSTEM_PROMPT = `你是一名严谨、有经验的阅卷老师。请分析
       "questionText": "第1题 ...",
       "roi": { "x": 0.05, "y": 0.10, "w": 0.90, "h": 0.08 },
       "answerRoi": { "x": 0.10, "y": 0.14, "w": 0.80, "h": 0.03 },
+      "blanks": [
+        { "roi": { "x": 0.10, "y": 0.14, "w": 0.10, "h": 0.02 }, "judge": "wrong", "getScore": 0, "fullScore": 2, "answerText": "29" }
+      ],
       "fullScore": 5,
       "getScore": 5,
       "judge": "correct",
@@ -66,7 +80,7 @@ const SYSTEM_PROMPT = `你是一名严谨、有经验的阅卷老师。请分析
     }
   ]
 }
-roi 坐标为相对图片宽高比例（0~1）。每题 roi 尽量贴合该题作答区域。answerRoi 必须位于该题 roi 之内或紧邻，表示可写入正确答案的空白位置；answerText 只写答案本身（不要加「标准答案：」等前缀），fullSolution 不要加「解析：」前缀。`
+roi 坐标为相对图片宽高比例（0~1）。每题 roi 尽量贴合该题作答区域。answerRoi 必须位于该题 roi 之内或紧邻，表示可写入正确答案的空白位置；blanks 中每个空的 roi 必须精确到空本身（判分标记会打在空旁）。answerText 只写答案本身（不要加「标准答案：」等前缀），fullSolution 不要加「解析：」前缀。`
 
 function extractJson(text: string): any | null {
   if (!text) return null
@@ -93,13 +107,45 @@ function normalizeJudge(j: any): JudgeType {
   return 'wrong'
 }
 
+/** 去掉 VLM 常带的前缀 */
+function stripPrefix(s: string): string {
+  return String(s || '')
+    .replace(/^标准答案[:：]?\s*/, '')
+    .replace(/^解析[:：]?\s*/, '')
+    .trim()
+}
+
+function normalizeBlanks(raw: any[]): AiBlank[] {
+  const out: AiBlank[] = []
+  for (const b of raw) {
+    const r = b.roi || b
+    const w = Number(r.w ?? r.width ?? 0)
+    const h = Number(r.h ?? r.height ?? 0)
+    // 空必须足够真实（太小的基本是幻觉）
+    if (w <= 0 || w > 1 || h <= 0 || h > 1) continue
+    const full = Number(b.fullScore ?? 0) || 0
+    let get = Number(b.getScore ?? 0) || 0
+    if (get > full) get = full
+    if (get < 0) get = 0
+    out.push({
+      roi: {
+        x: clamp01(Number(r.x ?? 0)),
+        y: clamp01(Number(r.y ?? 0)),
+        w: clamp01(w),
+        h: clamp01(h),
+      },
+      judge: normalizeJudge(b.judge),
+      getScore: get,
+      fullScore: full,
+      answerText: stripPrefix(String(b.answerText ?? b.answer ?? '')),
+    })
+  }
+  return out
+}
+
 function normalizeQuestions(raw: any[]): AiQuestion[] {
   const out: AiQuestion[] = []
-  const strip = (s: string) =>
-    String(s || '')
-      .replace(/^标准答案[:：]?\s*/, '')
-      .replace(/^解析[:：]?\s*/, '')
-      .trim()
+  const strip = stripPrefix
   for (const q of raw) {
     const roi = q.roi || {}
     const full = Number(q.fullScore ?? q.full_score ?? 0) || 0
@@ -116,6 +162,12 @@ function normalizeQuestions(raw: any[]): AiQuestion[] {
         w: clamp01(Number(ar.w ?? ar.width ?? 0)),
         h: clamp01(Number(ar.h ?? ar.height ?? 0)),
       }
+    }
+    // 一题多空（可选）：至少 1 个有效空才保留；单空且无独立判分意义时丢弃
+    let blanks: AiBlank[] | null = null
+    if (Array.isArray(q.blanks) && q.blanks.length > 0) {
+      const bs = normalizeBlanks(q.blanks)
+      blanks = bs.length > 0 ? bs : null
     }
     out.push({
       pageNo: Number(q.pageNo ?? 1) || 1,
@@ -134,6 +186,7 @@ function normalizeQuestions(raw: any[]): AiQuestion[] {
       fullSolution: strip(String(q.fullSolution ?? q.solution ?? '')),
       answerText: strip(String(q.answerText ?? q.answer ?? '')),
       answerRoi,
+      blanks,
     })
   }
   return out
@@ -148,16 +201,20 @@ function clamp01(n: number): number {
 export function syntheticResult(pageCount = 1): AiGradeResult {
   const base: (Omit<AiQuestion, 'pageNo'> & { answerRoi?: RoiRect | null })[] = [
     {
-      questionText: '第1题 计算 12 + 17 = ?',
+      questionText: '第1题 填空：12 + 17 = ▢，25 - 9 = ▢',
       roi: { x: 0.05, y: 0.08, w: 0.9, h: 0.1 },
       answerRoi: { x: 0.12, y: 0.135, w: 0.6, h: 0.03 },
-      fullScore: 5,
-      getScore: 5,
-      judge: 'correct',
+      blanks: [
+        { roi: { x: 0.24, y: 0.135, w: 0.08, h: 0.024 }, judge: 'correct', getScore: 2, fullScore: 2, answerText: '29' },
+        { roi: { x: 0.46, y: 0.135, w: 0.08, h: 0.024 }, judge: 'wrong', getScore: 0, fullScore: 2, answerText: '16' },
+      ],
+      fullScore: 4,
+      getScore: 2,
+      judge: 'partial',
       confidence: 0.92,
-      briefReason: '计算正确，过程清晰',
-      fullSolution: '12 + 17 = 29，进位加法结果正确。',
-      answerText: '29',
+      briefReason: '第二空退位减法出错：25-9 应为 16，学生误写 15（借位后误用 15-9=6 计算）',
+      fullSolution: '12 + 17 = 29；25 - 9：个位 5 不够减 9，向十位借 1，15 - 9 = 6，十位剩 1，结果为 16。',
+      answerText: '29；16',
     },
     {
       questionText: '第2题 解方程 2x + 6 = 14',
@@ -336,6 +393,7 @@ export async function persistGrade(taskId: string, r: AiGradeResult) {
         answerRoiY: q.answerRoi?.y ?? null,
         answerRoiW: q.answerRoi?.w ?? null,
         answerRoiH: q.answerRoi?.h ?? null,
+        blanksJson: q.blanks && q.blanks.length > 0 ? JSON.stringify(q.blanks) : null,
       },
     })
   }

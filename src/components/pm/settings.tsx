@@ -42,7 +42,7 @@ import { Badge } from '@/components/ui/badge'
 
 /** 标记层默认设置项（与打印面板一致） */
 const LAYER_ITEMS: { key: keyof MarkLayers; label: string }[] = [
-  { key: 'marks', label: '判分标记 √×⍻' },
+  { key: 'marks', label: '判分标记（√ × 半勾）' },
   { key: 'scores', label: '每题得分' },
   { key: 'answers', label: '答案回填' },
   { key: 'reason', label: '错因（错在哪步）' },
@@ -267,7 +267,6 @@ export function Settings() {
   if (loading) {
     return (
       <div className="mx-auto max-w-2xl space-y-4">
-        {/* 骨架屏（与卡片同构，不闪屏） */}
         {[1, 2, 3].map((i) => (
           <div key={i} className="h-40 animate-pulse rounded-xl border bg-muted/40" />
         ))}
@@ -293,6 +292,160 @@ export function Settings() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-4">
+      {/* ============ 打印机配置（置顶显眼） ============ */}
+      <Card className="overflow-hidden border-emerald-200 shadow-sm">
+        <div className="h-1 w-full bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-500" aria-hidden />
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Printer className="h-4 w-4 text-emerald-600" />
+            网络打印机配置
+            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">置顶</span>
+          </CardTitle>
+          <CardDescription>
+            通用 IPP（佳能/惠普/兄弟海外版，端口 631）或 Brother 直连（国行 DCP-T428W 等，端口 9100）；打印失败时可随时改用「浏览器直接打印」
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* 模式选择 */}
+          <div className="space-y-1.5">
+            <Label>连接模式</Label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => setCfg({ ...cfg, mode: 'ipp' })}
+                className={`rounded-lg border p-3 text-left transition ${
+                  cfg.mode !== 'brother'
+                    ? 'border-emerald-600 bg-emerald-50/60'
+                    : 'hover:bg-muted/50'
+                }`}
+              >
+                <div className="flex items-center gap-1.5 text-sm font-medium">
+                  <Printer className="h-3.5 w-3.5" />
+                  IPP 通用
+                </div>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  佳能 / 惠普 / 兄弟等，端口 631
+                </p>
+              </button>
+              <button
+                onClick={() => setCfg({ ...cfg, mode: 'brother' })}
+                className={`rounded-lg border p-3 text-left transition ${
+                  cfg.mode === 'brother'
+                    ? 'border-emerald-600 bg-emerald-50/60'
+                    : 'hover:bg-muted/50'
+                }`}
+              >
+                <div className="flex items-center gap-1.5 text-sm font-medium">
+                  <Printer className="h-3.5 w-3.5" />
+                  Brother 直连
+                </div>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  DCP-T428W 国行等，端口 9100
+                </p>
+              </button>
+            </div>
+          </div>
+
+          {cfg.mode === 'brother' ? (
+            <>
+              <div className="space-y-1.5">
+                <Label htmlFor="bhost">Brother 打印机 IP</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="bhost"
+                    value={cfg.host}
+                    onChange={(e) => setCfg({ ...cfg, host: e.target.value })}
+                    placeholder="192.168.1.100"
+                  />
+                  {scfg && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0"
+                      title="与扫描仪共用同一台一体机"
+                      onClick={() => {
+                        const host = scfg.host || new URL(scfg.esclUrl).hostname
+                        setCfg({ ...cfg, host })
+                        toast({ title: `已填入 ${host}` })
+                      }}
+                    >
+                      <LinkIcon className="mr-1 h-3.5 w-3.5" />
+                      同扫描仪
+                    </Button>
+                  )}
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  批注/标记层会自动渲染为 JPEG 经 9100 端口直连下发；文字版 PDF（答案/解析）将降级浏览器打印
+                </p>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="space-y-1.5">
+                <Label htmlFor="name">打印机名称</Label>
+                <Input
+                  id="name"
+                  value={cfg.name}
+                  onChange={(e) => setCfg({ ...cfg, name: e.target.value })}
+                  placeholder="例：Canon G3810"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="ippUrl">IPP 地址</Label>
+                <Input
+                  id="ippUrl"
+                  value={cfg.ippUrl}
+                  onChange={(e) => setCfg({ ...cfg, ippUrl: e.target.value })}
+                  placeholder="http://192.168.1.100:631/ipp/print"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  格式：<code className="rounded bg-muted px-1">http://打印机IP:631/ipp/print</code>
+                </p>
+              </div>
+            </>
+          )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex items-center justify-between rounded-lg border p-3">
+              <div>
+                <Label className="text-sm">双面打印</Label>
+                <p className="text-[11px] text-muted-foreground">默认打印模式</p>
+              </div>
+              <Switch checked={cfg.duplex} onCheckedChange={(v) => setCfg({ ...cfg, duplex: v })} />
+            </div>
+            <div className="flex items-center gap-2 rounded-lg border p-3">
+              <Label className="text-sm whitespace-nowrap">份数</Label>
+              <Input
+                type="number"
+                min={1}
+                max={20}
+                value={cfg.copies}
+                onChange={(e) => setCfg({ ...cfg, copies: Math.max(1, Number(e.target.value) || 1) })}
+                className="h-8"
+              />
+            </div>
+          </div>
+
+          <div className="flex gap-2">
+            <Button onClick={probe} disabled={probing} variant="outline" className="flex-1">
+              {probing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wifi className="mr-2 h-4 w-4" />}
+              {cfg.mode === 'brother' ? '测试 9100 端口' : '测试 IPP 连接'}
+            </Button>
+            <Button onClick={save} disabled={saving} className="flex-1 bg-emerald-600 hover:bg-emerald-700">
+              {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+              保存配置
+            </Button>
+          </div>
+
+          {probeResult && (
+            <Alert variant={probeResult.ok ? 'default' : 'destructive'}>
+              {probeResult.ok ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
+              <AlertTitle>{probeResult.ok ? '连接成功' : '连接失败'}</AlertTitle>
+              <AlertDescription>{probeResult.msg}</AlertDescription>
+            </Alert>
+          )}
+        </CardContent>
+      </Card>
+        {/* 骨架屏（与卡片同构，不闪屏） */}
       {/* ============ 账号安全（修改密码） ============ */}
       <Card>
         <CardHeader>
@@ -442,157 +595,6 @@ export function Settings() {
         </CardContent>
       </Card>
 
-      {/* ============ 打印机配置 ============ */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Printer className="h-4 w-4 text-emerald-600" />
-            网络打印机配置
-          </CardTitle>
-          <CardDescription>
-            通用 IPP（佳能/惠普/兄弟海外版，端口 631）或 Brother 直连（国行 DCP-T428W 等，端口 9100）
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {/* 模式选择 */}
-          <div className="space-y-1.5">
-            <Label>连接模式</Label>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={() => setCfg({ ...cfg, mode: 'ipp' })}
-                className={`rounded-lg border p-3 text-left transition ${
-                  cfg.mode !== 'brother'
-                    ? 'border-emerald-600 bg-emerald-50/60'
-                    : 'hover:bg-muted/50'
-                }`}
-              >
-                <div className="flex items-center gap-1.5 text-sm font-medium">
-                  <Printer className="h-3.5 w-3.5" />
-                  IPP 通用
-                </div>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">
-                  佳能 / 惠普 / 兄弟等，端口 631
-                </p>
-              </button>
-              <button
-                onClick={() => setCfg({ ...cfg, mode: 'brother' })}
-                className={`rounded-lg border p-3 text-left transition ${
-                  cfg.mode === 'brother'
-                    ? 'border-emerald-600 bg-emerald-50/60'
-                    : 'hover:bg-muted/50'
-                }`}
-              >
-                <div className="flex items-center gap-1.5 text-sm font-medium">
-                  <Printer className="h-3.5 w-3.5" />
-                  Brother 直连
-                </div>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">
-                  DCP-T428W 国行等，端口 9100
-                </p>
-              </button>
-            </div>
-          </div>
-
-          {cfg.mode === 'brother' ? (
-            <>
-              <div className="space-y-1.5">
-                <Label htmlFor="bhost">Brother 打印机 IP</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="bhost"
-                    value={cfg.host}
-                    onChange={(e) => setCfg({ ...cfg, host: e.target.value })}
-                    placeholder="192.168.1.100"
-                  />
-                  {scfg && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="shrink-0"
-                      title="与扫描仪共用同一台一体机"
-                      onClick={() => {
-                        const host = scfg.host || new URL(scfg.esclUrl).hostname
-                        setCfg({ ...cfg, host })
-                        toast({ title: `已填入 ${host}` })
-                      }}
-                    >
-                      <LinkIcon className="mr-1 h-3.5 w-3.5" />
-                      同扫描仪
-                    </Button>
-                  )}
-                </div>
-                <p className="text-[11px] text-muted-foreground">
-                  批注/标记层会自动渲染为 JPEG 经 9100 端口直连下发；文字版 PDF（答案/解析）将降级浏览器打印
-                </p>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="space-y-1.5">
-                <Label htmlFor="name">打印机名称</Label>
-                <Input
-                  id="name"
-                  value={cfg.name}
-                  onChange={(e) => setCfg({ ...cfg, name: e.target.value })}
-                  placeholder="例：Canon G3810"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="ippUrl">IPP 地址</Label>
-                <Input
-                  id="ippUrl"
-                  value={cfg.ippUrl}
-                  onChange={(e) => setCfg({ ...cfg, ippUrl: e.target.value })}
-                  placeholder="http://192.168.1.100:631/ipp/print"
-                />
-                <p className="text-[11px] text-muted-foreground">
-                  格式：<code className="rounded bg-muted px-1">http://打印机IP:631/ipp/print</code>
-                </p>
-              </div>
-            </>
-          )}
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex items-center justify-between rounded-lg border p-3">
-              <div>
-                <Label className="text-sm">双面打印</Label>
-                <p className="text-[11px] text-muted-foreground">默认打印模式</p>
-              </div>
-              <Switch checked={cfg.duplex} onCheckedChange={(v) => setCfg({ ...cfg, duplex: v })} />
-            </div>
-            <div className="flex items-center gap-2 rounded-lg border p-3">
-              <Label className="text-sm whitespace-nowrap">份数</Label>
-              <Input
-                type="number"
-                min={1}
-                max={20}
-                value={cfg.copies}
-                onChange={(e) => setCfg({ ...cfg, copies: Math.max(1, Number(e.target.value) || 1) })}
-                className="h-8"
-              />
-            </div>
-          </div>
-
-          <div className="flex gap-2">
-            <Button onClick={probe} disabled={probing} variant="outline" className="flex-1">
-              {probing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wifi className="mr-2 h-4 w-4" />}
-              {cfg.mode === 'brother' ? '测试 9100 端口' : '测试 IPP 连接'}
-            </Button>
-            <Button onClick={save} disabled={saving} className="flex-1 bg-emerald-600 hover:bg-emerald-700">
-              {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-              保存配置
-            </Button>
-          </div>
-
-          {probeResult && (
-            <Alert variant={probeResult.ok ? 'default' : 'destructive'}>
-              {probeResult.ok ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
-              <AlertTitle>{probeResult.ok ? '连接成功' : '连接失败'}</AlertTitle>
-              <AlertDescription>{probeResult.msg}</AlertDescription>
-            </Alert>
-          )}
-        </CardContent>
-      </Card>
 
       {/* ============ 扫描仪配置 ============ */}
       {scfg && (

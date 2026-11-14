@@ -6,12 +6,13 @@ import { pdfDir, relPath, absPath } from './storage'
 import {
   computeBackfill,
   computeBlankMarks,
+  computeNextTops,
+  questionMarkPos,
   parseBlanks,
   truncateForBeside,
   cleanAnswerText,
   cleanSolutionText,
   cleanReasonText,
-  MARK_SIZE_Q,
 } from './answer-layout'
 
 export type JudgeType = 'correct' | 'wrong' | 'partial'
@@ -226,10 +227,11 @@ function annotationRect(rect: { x: number; y: number; w: number; h: number }, a:
   const by = rect.y + a.roiY * rect.h
   const bw = a.roiW * rect.w
   const bh = a.roiH * rect.h
-  // v2：题级标记变小（不超过页宽 2.2%、不超过框高 55%、上限 16pt）
-  const markSize = Math.min(bh * 0.55, MARK_SIZE_Q * rect.w, 16)
-  const mx = bx + bw - markSize * 0.7
-  const my = by + markSize * 0.6
+  // v3：题级标记在题号旁（ROI 左侧页边），不再放右边
+  const mp = questionMarkPos({ x: a.roiX, y: a.roiY, w: a.roiW, h: a.roiH })
+  const mx = rect.x + mp.cx * rect.w
+  const my = rect.y + mp.cy * rect.h
+  const markSize = mp.size * rect.w
   return { bx, by, bw, bh, markSize, mx, my }
 }
 
@@ -268,10 +270,11 @@ function drawBackfill(
   doc: PDFDocument,
   rect: { x: number; y: number; w: number; h: number },
   a: any,
-  layers: RenderLayers
+  layers: RenderLayers,
+  nextTopY?: number
 ) {
   if (!layers.answers && !layers.reason && !layers.solution) return
-  const plan = computeBackfill({ ...a, judgeType: a.judgeType })
+  const plan = computeBackfill({ ...a, judgeType: a.judgeType, nextTopY })
   // 一题多空：答案已写入每个空内（见 drawBlankMarks），跳过题级答案避免重复重叠
   const hasBlanks = parseBlanks(a.blanksJson).length > 0
   const toAbs = (b: { x: number; y: number; w: number; h: number }) => ({
@@ -365,6 +368,8 @@ function drawPageAnnotations(
   layers: RenderLayers,
   opts: { withBoxes: boolean; withBackfill: boolean }
 ) {
+  // v3：下一题顶界限制回填位置，不压下一题文字
+  const nextTops = opts.withBackfill ? computeNextTops(list) : null
   for (const a of list) {
     const { bx, by, bw, bh, markSize, mx, my } = annotationRect(rect, a)
 
@@ -378,30 +383,34 @@ function drawPageAnnotations(
       doc.restore()
     }
 
-    // 题级判分符号（右上角内侧，v2 小号）
+    // 题级判分符号（题号旁，v3 小号）
     if (layers.marks) {
       drawJudgeMark(doc, a.judgeType, mx, my, markSize)
     }
 
-    // 每题得分（小字，框内右下角，不跑位）
+    // 每题得分（小字，框内右下角；单空题已有空旁小得分，不重复）
     if (layers.scores) {
-      const fs_ = 7
-      doc
-        .fontSize(fs_)
-        .fillColor(COLORS.scoreBg)
-        .font(F_BOLD)
-        .text(`${a.getScore}/${a.fullScore}`, bx + 2, by + bh - fs_ - 1.5, {
-          width: bw - 4,
-          align: 'right',
-          lineBreak: false,
-        })
+      const blanks = parseBlanks(a.blanksJson)
+      const singleBlankScored = blanks.length === 1 && blanks[0].fullScore > 0
+      if (!singleBlankScored) {
+        const fs_ = 7
+        doc
+          .fontSize(fs_)
+          .fillColor(COLORS.scoreBg)
+          .font(F_BOLD)
+          .text(`${a.getScore}/${a.fullScore}`, bx + 2, by + bh - fs_ - 1.5, {
+            width: bw - 4,
+            align: 'right',
+            lineBreak: false,
+          })
+      }
     }
 
     // 每空小标记
     drawBlankMarks(doc, rect, a, layers)
 
-    // 答案/错因/解析回填
-    if (opts.withBackfill) drawBackfill(doc, rect, a, layers)
+    // 答案/错因/解析回填（v3：不压题）
+    if (opts.withBackfill) drawBackfill(doc, rect, a, layers, nextTops?.get(a.id))
   }
 }
 

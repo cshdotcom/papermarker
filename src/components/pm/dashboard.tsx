@@ -16,6 +16,9 @@ import {
   ChevronRight,
   Smartphone,
   Download,
+  Settings as SettingsIcon,
+  Sparkles,
+  Zap,
 } from 'lucide-react'
 import { api, type TaskSummary } from '@/lib/pm'
 import { usePm } from '@/lib/pm-store'
@@ -42,16 +45,16 @@ import {
 } from '@/components/ui/alert-dialog'
 
 const STATUS_MAP: Record<string, { label: string; cls: string; icon: any }> = {
-  pending_ai: { label: 'AI 批改中', cls: 'bg-amber-100 text-amber-700', icon: Clock },
-  pending_review: { label: '待复核', cls: 'bg-sky-100 text-sky-700', icon: AlertCircle },
-  reviewed_ok: { label: '已复核', cls: 'bg-emerald-100 text-emerald-700', icon: CheckCircle2 },
+  pending_ai: { label: 'AI Batch Grading', cls: 'bg-amber-100 text-amber-700', icon: Clock },
+  pending_review: { label: 'Pending Review', cls: 'bg-sky-100 text-sky-700', icon: AlertCircle },
+  reviewed_ok: { label: 'Reviewed', cls: 'bg-emerald-100 text-emerald-700', icon: CheckCircle2 },
 }
 
 const PRINT_MAP: Record<string, { label: string; cls: string }> = {
-  idle: { label: '未打印', cls: 'bg-muted text-muted-foreground' },
-  printing: { label: '打印中', cls: 'bg-amber-100 text-amber-700' },
-  print_finish: { label: '已打印', cls: 'bg-emerald-100 text-emerald-700' },
-  print_failed: { label: '打印失败', cls: 'bg-red-100 text-red-700' },
+  idle: { label: 'Not Printed', cls: 'bg-muted text-muted-foreground' },
+  printing: { label: 'Printing', cls: 'bg-amber-100 text-amber-700' },
+  print_finish: { label: 'Printed', cls: 'bg-emerald-100 text-emerald-700' },
+  print_failed: { label: 'Print Failed', cls: 'bg-red-100 text-red-700' },
 }
 
 export function Dashboard({ onOpenTask }: { onOpenTask: (id: string) => void }) {
@@ -62,6 +65,7 @@ export function Dashboard({ onOpenTask }: { onOpenTask: (id: string) => void }) 
   const inputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
   const setView = usePm((s) => s.setView)
+  const username = usePm((s) => s.username)
   const pushPendingScanFiles = usePm((s) => s.pushPendingScanFiles)
 
   const refresh = async () => {
@@ -70,7 +74,7 @@ export function Dashboard({ onOpenTask }: { onOpenTask: (id: string) => void }) 
       const r = await api.listTasks()
       setTasks(r.tasks)
     } catch (e: any) {
-      toast({ title: '加载失败', description: e.message, variant: 'destructive' })
+      toast({ title: 'Loading failed', description: e.message, variant: 'destructive' })
     } finally {
       setLoading(false)
     }
@@ -81,8 +85,7 @@ export function Dashboard({ onOpenTask }: { onOpenTask: (id: string) => void }) 
   }, [])
 
   /**
-   * 拍照 / 选图 → 进入统一的「四角剪辑 → 托盘 → AI 批改」管线
-   * （原直传 /api/upload 已废弃，修掉「server action not found」报错）
+   * Photo / image selection → enters the unified "four-corner crop → tray → AI grading" pipeline
    */
   const onPick = (files: FileList | null) => {
     if (!files || files.length === 0) return
@@ -91,8 +94,8 @@ export function Dashboard({ onOpenTask }: { onOpenTask: (id: string) => void }) 
     pushPendingScanFiles(arr)
     setView('scan')
     toast({
-      title: `已加入 ${arr.length} 张照片`,
-      description: '先调节边角与增强滤镜，确认后自动进入扫描托盘',
+      title: `Added ${arr.length} photo(s)`,
+      description: 'First adjust the corners and enhancement filter, then confirm to automatically enter the scan tray',
     })
     if (inputRef.current) inputRef.current.value = ''
   }
@@ -103,16 +106,16 @@ export function Dashboard({ onOpenTask }: { onOpenTask: (id: string) => void }) 
     try {
       await api.deleteTask(deleting.id)
       setTasks((ts) => ts.filter((t) => t.id !== deleting.id))
-      toast({ title: '任务已删除', description: deleting.paperName })
+      toast({ title: 'Task deleted', description: deleting.paperName })
     } catch (e: any) {
-      toast({ title: '删除失败', description: e.message, variant: 'destructive' })
+      toast({ title: 'Delete failed', description: e.message, variant: 'destructive' })
     } finally {
       setDeleteBusy(false)
       setDeleting(null)
     }
   }
 
-  // 统计
+  // Statistics
   const pendingCount = tasks.filter(
     (t) => t.reviewStatus === 'pending_review' || t.reviewStatus === 'pending_ai'
   ).length
@@ -125,97 +128,110 @@ export function Dashboard({ onOpenTask }: { onOpenTask: (id: string) => void }) 
         )
       : 0
 
-  const STATS = [
-    { label: '批改任务', value: String(tasks.length), icon: PenLine, cls: 'text-emerald-600 bg-emerald-50' },
-    { label: '待复核', value: String(pendingCount), icon: Clock, cls: 'text-amber-600 bg-amber-50' },
-    { label: '平均得分率', value: `${avgRate}%`, icon: TrendingUp, cls: 'text-sky-600 bg-sky-50' },
-    { label: '已打印', value: String(printedCount), icon: Printer, cls: 'text-slate-600 bg-slate-100' },
-  ]
-
   return (
     <div className="space-y-4">
-      {/* 统计行 */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        {STATS.map((s) => {
-          const Icon = s.icon
-          return (
-            <Card key={s.label} className="py-0">
-              <CardContent className="flex items-center gap-3 p-4">
-                <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${s.cls}`}>
-                  <Icon className="h-5 w-5" />
-                </div>
-                <div className="min-w-0">
-                  <div className="text-xl font-bold leading-none">{s.value}</div>
-                  <div className="mt-1 text-[11px] text-muted-foreground">{s.label}</div>
-                </div>
-              </CardContent>
-            </Card>
-          )
-        })}
+      {/* ===== Hero Banner ===== */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-emerald-600 via-emerald-500 to-teal-500 text-white shadow-lg">
+        <div
+          className="pointer-events-none absolute inset-y-0 right-0 hidden w-[42%] bg-cover bg-center opacity-90 sm:block"
+          style={{ backgroundImage: 'url(/hero-illustration.png)' }}
+          aria-hidden
+        />
+        <div className="pointer-events-none absolute -right-16 -top-16 h-48 w-48 rounded-full bg-white/10" aria-hidden />
+        <div className="pointer-events-none absolute -bottom-10 right-1/3 h-32 w-32 rounded-full bg-white/10" aria-hidden />
+        <div className="relative max-w-[58%] p-5 sm:p-7">
+          <div className="mb-1 inline-flex items-center gap-1.5 rounded-full bg-white/20 px-2.5 py-1 text-[11px] font-medium backdrop-blur">
+            <Sparkles className="h-3 w-3" />
+            AI Grading · Grading in 30 seconds
+          </div>
+          <h1 className="text-xl font-bold leading-snug sm:text-2xl">
+            {username ? `${username}, Hello` : 'Hello, Teacher'}
+          </h1>
+          <p className="mt-1 max-w-md text-[13px] leading-relaxed text-emerald-50/90">
+            Take a photo of the exam paper or scan it with the scanner; AI will grade it and annotate each blank, automatically backfill answers and error causes, and print it with one click.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              onClick={() => inputRef.current?.click()}
+              className="flex items-center gap-1.5 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-emerald-700 shadow-md transition hover:bg-emerald-50 active:scale-95"
+            >
+              <Camera className="h-4 w-4" />
+              Take Photo to Grade
+            </button>
+            <button
+              onClick={() => setView('scan')}
+              className="flex items-center gap-1.5 rounded-xl bg-white/20 px-4 py-2.5 text-sm font-semibold backdrop-blur transition hover:bg-white/30 active:scale-95"
+            >
+              <ScanLine className="h-4 w-4" />
+              Scanner / Tray
+            </button>
+            <button
+              onClick={() => setView('settings')}
+              className="flex items-center gap-1.5 rounded-xl bg-white/20 px-4 py-2.5 text-sm font-semibold backdrop-blur transition hover:bg-white/30 active:scale-95"
+              title="Printer / Scanner / Annotation Layer Configuration"
+            >
+              <SettingsIcon className="h-4 w-4" />
+              Device Configuration
+            </button>
+          </div>
+        </div>
       </div>
 
-      {/* 快速开始 */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Camera className="h-4 w-4 text-emerald-600" />
-            快速开始
-          </CardTitle>
-          <CardDescription>拍照上传会先进入边角剪辑（透视矫正 / 黑白增强），再进入扫描托盘提交 AI 批改</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3 sm:grid-cols-2">
-          <input
-            ref={inputRef}
-            type="file"
-            accept="image/*"
-            multiple
-            capture="environment"
-            className="hidden"
-            onChange={(e) => onPick(e.target.files)}
-          />
-          <button
-            onClick={() => inputRef.current?.click()}
-            className="flex items-center gap-3 rounded-xl border-2 border-dashed border-emerald-300 bg-emerald-50/40 p-4 text-left transition hover:border-emerald-500 hover:bg-emerald-50"
-          >
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-sm">
-              <Camera className="h-5 w-5" />
-            </div>
-            <div className="min-w-0">
-              <div className="text-sm font-semibold">拍照 / 相册上传</div>
-              <div className="text-[11px] text-muted-foreground">
-                手机可直接调相机，多选批量，自动边缘识别
-              </div>
-            </div>
-          </button>
-          <button
-            onClick={() => setView('scan')}
-            className="flex items-center gap-3 rounded-xl border-2 border-dashed border-muted-foreground/25 bg-muted/30 p-4 text-left transition hover:border-emerald-400 hover:bg-emerald-50/40"
-          >
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-800 text-white shadow-sm">
-              <ScanLine className="h-5 w-5" />
-            </div>
-            <div className="min-w-0">
-              <div className="text-sm font-semibold">网络扫描仪 / 托盘 / 复印</div>
-              <div className="text-[11px] text-muted-foreground">
-                eSCL 通用 · Brother 54921 · 托盘排序 · 快速复印
-              </div>
-            </div>
-          </button>
-        </CardContent>
-      </Card>
+      {/* ===== Statistics ===== */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatCard label="Grading Tasks" value={String(tasks.length)} icon={PenLine} cls="bg-emerald-50 text-emerald-600" />
+        <StatCard label="Pending Review" value={String(pendingCount)} icon={Clock} cls="bg-amber-50 text-amber-600" />
+        <StatCard label="Average Score Rate" value={`${avgRate}%`} icon={TrendingUp} cls="bg-teal-50 text-teal-600" />
+        <StatCard label="Printed" value={String(printedCount)} icon={Printer} cls="bg-slate-100 text-slate-600" />
+      </div>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        capture="environment"
+        className="hidden"
+        onChange={(e) => onPick(e.target.files)}
+      />
 
-      {/* 任务列表 */}
+      {/* ===== Multi-function Quick Entry ===== */}
+      <div className="grid gap-3 sm:grid-cols-3">
+        <QuickCard
+          onClick={() => inputRef.current?.click()}
+          icon={<Camera className="h-5 w-5 text-white" />}
+          iconCls="bg-emerald-600"
+          title="Photo / Album Upload"
+          desc="Phone can directly call the camera, multi-select batch, auto corner crop"
+        />
+        <QuickCard
+          onClick={() => setView('scan')}
+          icon={<ScanLine className="h-5 w-5 text-white" />}
+          iconCls="bg-slate-800"
+          title="Network Scanner / Copy"
+          desc="eSCL universal · Brother 54921 · Tray sorting · Quick copy"
+        />
+        <QuickCard
+          onClick={() => setView('settings')}
+          icon={<Printer className="h-5 w-5 text-white" />}
+          iconCls="bg-amber-600"
+          title="Printer Configuration"
+          desc="IPP universal / Brother direct connection · Test connection · Annotation layer default values"
+          highlight
+        />
+      </div>
+
+      {/* ===== Task List ===== */}
       <Card>
         <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
           <div>
             <CardTitle className="flex items-center gap-2 text-base">
               <PenLine className="h-4 w-4 text-emerald-600" />
-              批改任务
+              Grading Tasks
             </CardTitle>
-            <CardDescription>点击任务进入复核 · 批注 · 打印</CardDescription>
+            <CardDescription>Click a task to enter review · annotate · print</CardDescription>
           </div>
           <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
-            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : '刷新'}
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Refresh'}
           </Button>
         </CardHeader>
         <CardContent className="p-0">
@@ -223,8 +239,8 @@ export function Dashboard({ onOpenTask }: { onOpenTask: (id: string) => void }) 
             {tasks.length === 0 && !loading ? (
               <div className="flex flex-col items-center justify-center gap-2 py-16 text-muted-foreground">
                 <FileImage className="h-10 w-10 opacity-40" />
-                <p className="text-sm">还没有批改任务</p>
-                <p className="text-xs">拍一张试卷照片开始吧</p>
+                <p className="text-sm">No grading tasks yet</p>
+                <p className="text-xs">Take a photo of an exam paper to get started</p>
               </div>
             ) : (
               <div className="space-y-2">
@@ -235,7 +251,7 @@ export function Dashboard({ onOpenTask }: { onOpenTask: (id: string) => void }) 
                   return (
                     <div
                       key={t.id}
-                      className="group flex items-center gap-3 rounded-lg border bg-card p-3 transition hover:border-emerald-400 hover:bg-emerald-50/40"
+                      className="group flex items-center gap-3 rounded-xl border bg-card p-3 transition hover:border-emerald-400 hover:bg-emerald-50/40 hover:shadow-sm"
                     >
                       <button
                         onClick={() => onOpenTask(t.id)}
@@ -254,7 +270,7 @@ export function Dashboard({ onOpenTask }: { onOpenTask: (id: string) => void }) 
                           <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
                             <span>{new Date(t.createdAt).toLocaleString('zh-CN')}</span>
                             <span>·</span>
-                            <span>{t.annotationCount} 题</span>
+                            <span>{t.annotationCount} questions</span>
                           </div>
                         </div>
                         <div className="flex shrink-0 flex-col items-end gap-1">
@@ -276,8 +292,8 @@ export function Dashboard({ onOpenTask }: { onOpenTask: (id: string) => void }) 
                       </button>
                       <button
                         onClick={() => setDeleting(t)}
-                        title="删除任务"
-                        aria-label="删除任务"
+                        title="Delete task"
+                        aria-label="Delete task"
                         className="shrink-0 rounded-md p-1.5 text-muted-foreground/40 opacity-0 transition hover:bg-red-50 hover:text-red-600 focus:opacity-100 group-hover:opacity-100"
                       >
                         <Trash2 className="h-4 w-4" />
@@ -291,7 +307,7 @@ export function Dashboard({ onOpenTask }: { onOpenTask: (id: string) => void }) 
         </CardContent>
       </Card>
 
-      {/* Android APP 下载（精简条） */}
+      {/* ===== Android APP Download ===== */}
       <a
         href="/papermarker.apk"
         download="PaperMarker.apk"
@@ -301,25 +317,25 @@ export function Dashboard({ onOpenTask }: { onOpenTask: (id: string) => void }) 
           <Smartphone className="h-4 w-4" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold text-emerald-900">安卓 APP（原生扫描端）</div>
+          <div className="text-sm font-semibold text-emerald-900">Android APP (v1.1 Fixed Login Loop)</div>
           <div className="truncate text-[11px] text-muted-foreground">
-            相机多页扫描 · 透视矫正 · 直连打印 · 与网页同账号（API Key 连接）
+            Camera multi-page scanning · Perspective correction · Direct printing · Same account as web (supports API Key connection)
           </div>
         </div>
         <Download className="h-4 w-4 shrink-0 text-emerald-700" />
       </a>
 
-      {/* 删除确认 */}
+      {/* Delete confirmation */}
       <AlertDialog open={!!deleting} onOpenChange={(v) => !v && setDeleting(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>删除这个任务？</AlertDialogTitle>
+            <AlertDialogTitle>Delete this task?</AlertDialogTitle>
             <AlertDialogDescription>
-              「{deleting?.paperName}」及其全部批注、原图、PDF 将被删除，操作不可恢复。
+              "{deleting?.paperName}" and all its annotations, original images, and PDFs will be deleted. This operation cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleteBusy}>取消</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleteBusy}>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={(e) => {
                 e.preventDefault()
@@ -328,11 +344,65 @@ export function Dashboard({ onOpenTask }: { onOpenTask: (id: string) => void }) 
               className="bg-red-600 text-white hover:bg-red-700"
             >
               {deleteBusy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
-              确认删除
+              Confirm Delete
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  )
+}
+
+function StatCard({ label, value, icon: Icon, cls }: { label: string; value: string; icon: any; cls: string }) {
+  return (
+    <Card className="py-0 transition hover:shadow-sm">
+      <CardContent className="flex items-center gap-3 p-4">
+        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${cls}`}>
+          <Icon className="h-5 w-5" />
+        </div>
+        <div className="min-w-0">
+          <div className="text-xl font-bold leading-none">{value}</div>
+          <div className="mt-1 text-[11px] text-muted-foreground">{label}</div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function QuickCard({
+  onClick,
+  icon,
+  iconCls,
+  title,
+  desc,
+  highlight,
+}: {
+  onClick: () => void
+  icon: React.ReactNode
+  iconCls: string
+  title: string
+  desc: string
+  highlight?: boolean
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`group flex items-start gap-3 rounded-xl border-2 border-dashed p-4 text-left transition active:scale-[0.98] ${
+        highlight
+          ? 'border-amber-300 bg-amber-50/40 hover:border-amber-500 hover:bg-amber-50'
+          : 'border-emerald-300/70 bg-emerald-50/30 hover:border-emerald-500 hover:bg-emerald-50/70'
+      }`}
+    >
+      <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl shadow-sm ${iconCls}`}>
+        {icon}
+      </div>
+      <div className="min-w-0">
+        <div className="flex items-center gap-1 text-sm font-semibold">
+          {title}
+          {highlight && <Zap className="h-3.5 w-3.5 text-amber-500" />}
+        </div>
+        <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{desc}</div>
+      </div>
+    </button>
   )
 }

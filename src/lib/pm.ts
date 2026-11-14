@@ -308,6 +308,14 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ taskId, layers }),
     }),
+  /** 浏览器直接打印：按图层渲染好的批注页 JPEG（dataUrl） */
+  printPages: (taskId: string, withImage: boolean, layers?: Partial<MarkLayers>) =>
+    jfetch<{ pages: { pageNo: number; dataUrl: string }[] }>(
+      `/api/print/pages?taskId=${taskId}&withImage=${withImage ? 1 : 0}&layers=${encodeURIComponent(
+        JSON.stringify(layers || {})
+      )}`,
+      { timeoutMs: 60000 }
+    ),
   // 扫描相关
   getScanner: () => jfetch<{ config: ScannerConfig }>('/api/scanner/config', { timeoutMs: 15000 }),
   saveScanner: (cfg: Partial<ScannerConfig>) =>

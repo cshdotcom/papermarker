@@ -206,7 +206,8 @@ export function ScanView() {
     <div className="grid gap-4 lg:grid-cols-2">
       {/* 左：采集 */}
       <div className="space-y-4">
-        <Card>
+        <Card className="overflow-hidden">
+          <div className="h-1 w-full bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-500" aria-hidden />
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
               <div>
@@ -363,10 +364,18 @@ export function ScanView() {
           </CardHeader>
           <CardContent>
             {pages.length === 0 ? (
-              <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed py-10 text-muted-foreground">
+              <div className="relative flex flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border border-dashed py-10 text-muted-foreground">
+                <img
+                  src="/scan-illustration.png"
+                  alt=""
+                  aria-hidden
+                  className="pointer-events-none absolute inset-y-0 right-0 hidden h-full object-cover opacity-15 sm:block"
+                />
                 <FileStack className="h-8 w-8 opacity-40" />
-                <p className="text-sm">暂无扫描页</p>
-                <p className="text-xs">拍摄或扫描后会出现在这里</p>
+                <p className="text-sm font-medium text-foreground/70">暂无扫描页</p>
+                <p className="max-w-[240px] text-center text-xs">
+                  拍摄或扫描的页面会出现在这里；逐页四角矫正后提交 AI 批改
+                </p>
               </div>
             ) : (
               <div className="grid max-h-72 grid-cols-2 gap-2 overflow-y-auto sm:grid-cols-3">

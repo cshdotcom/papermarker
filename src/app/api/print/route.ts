@@ -95,9 +95,28 @@ export async function POST(req: NextRequest) {
           jpegs.push(...pages.map((p) => p.jpeg))
         }
         const r = await brotherPrintJpegs(pHost, jpegs, `PM-${task.paperName}-${subType}`)
-        return finish(r.ok, r.msg)
+        if (r.ok) return finish(r.ok, r.msg)
+        // 直连失败（服务器与打印机不在同一局域网等）→ 兜底：返回 PDF 交给浏览器/APP 打印
+        let fbFile = await db.file.findFirst({ where: { taskId, fileType } })
+        if (!fbFile) {
+          try {
+            await generateTaskPdfs(taskId, layers)
+          } catch {}
+          fbFile = await db.file.findFirst({ where: { taskId, fileType } })
+        }
+        return finish(false, r.msg, fbFile ? { fallbackPdfFileId: fbFile.id } : {})
       } catch (e: any) {
-        return finish(false, `Brother 打印异常：${e?.message || e}`)
+        // 异常同样兜底返回 PDF
+        let fbFile: any = null
+        try {
+          await generateTaskPdfs(taskId, layers)
+          fbFile = await db.file.findFirst({ where: { taskId, fileType } })
+        } catch {}
+        return finish(
+          false,
+          `Brother 打印异常：${e?.message || e}`,
+          fbFile ? { fallbackPdfFileId: fbFile.id } : {}
+        )
       }
     }
     // answer / parse（纯文字 PDF）：直连模式不支持 → 降级浏览器打印

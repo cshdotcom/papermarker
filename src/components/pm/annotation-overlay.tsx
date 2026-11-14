@@ -8,6 +8,8 @@ import { JudgeMarkIcon } from './judge-icons'
 import {
   computeBackfill,
   computeBlankMarks,
+  computeNextTops,
+  questionMarkPos,
   truncateForBeside,
   cleanAnswerText,
   cleanSolutionText,
@@ -38,6 +40,11 @@ export function AnnotationOverlay({ page, annotations, pageScore }: Props) {
   const [imgError, setImgError] = useState(false)
 
   const aspect = page.w && page.h ? page.w / page.h : 0.707
+
+  // v3：下一题顶界（限制回填不压下一题）
+  const nextTops = computeNextTops(
+    annotations.map((a) => ({ id: a.id, roiY: a.roi.y, roiH: a.roi.h }))
+  )
 
   return (
     <div className="flex flex-col gap-2">
@@ -125,22 +132,21 @@ export function AnnotationOverlay({ page, annotations, pageScore }: Props) {
                   {a.questionText?.slice(0, 10) || '题'}
                 </span>
 
-                {/* 题级判分标记：右上角（v2 小号矢量 ⍻） */}
-                {layers.marks && (
-                  <div className="absolute right-0.5 top-0.5 rounded bg-white/80 p-[1px]">
-                    <JudgeMarkIcon type={a.judgeType} size={14} strokeWidth={2.6} />
-                  </div>
-                )}
-
-                {/* 每题得分：左下角小字（v2 更小） */}
-                {layers.scores && (
-                  <div className="absolute bottom-0 left-0.5 rounded bg-slate-900/75 px-1 text-[9px] font-semibold leading-4 text-white">
+                {/* 每题得分：右下角小字（v3；单空题已有空旁小得分，不重复显示） */}
+                {layers.scores && !(
+                  a.blanks && a.blanks.length === 1 && (a.blanks[0].fullScore || 0) > 0
+                ) && (
+                  <div className="absolute bottom-0 right-0.5 rounded bg-slate-900/75 px-1 text-[9px] font-semibold leading-4 text-white">
                     {a.getScore}/{a.fullScore}
                   </div>
                 )}
               </div>
             )
           })}
+
+        {imgLoaded && (
+          <QuestionMarksLayer annotations={annotations} />
+        )}
 
         {/* 每空小标记（v2：小√×⍻ + 小得分 + 空内答案，贴在空旁的小空位） */}
         {imgLoaded &&
@@ -158,10 +164,44 @@ export function AnnotationOverlay({ page, annotations, pageScore }: Props) {
         {/* 答案/错因/解析回填预览（页面级坐标，与 PDF 同一套布局算法，不随题框缩放） */}
         {imgLoaded &&
           annotations.map((a) => (
-            <BackfillPreview key={`bf-${a.id}`} annotation={a} onSelect={() => setSelected(a.id)} />
+            <BackfillPreview
+              key={`bf-${a.id}`}
+              annotation={a}
+              nextTopY={nextTops.get(a.id)}
+              onSelect={() => setSelected(a.id)}
+            />
           ))}
       </div>
     </div>
+  )
+}
+
+/** 题级判分标记层（v3：题号旁，小号矢量⍻，不放右边） */
+function QuestionMarksLayer({ annotations }: { annotations: Annotation[] }) {
+  const { layers, selectedAnnotationId, setSelected } = usePm()
+  if (!layers.marks) return null
+  return (
+    <>
+      {annotations.map((a) => {
+        const mp = questionMarkPos({ x: a.roi.x, y: a.roi.y, w: a.roi.w, h: a.roi.h })
+        return (
+          <div
+            key={`qm-${a.id}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              setSelected(a.id)
+            }}
+            className="absolute flex -translate-x-1/2 -translate-y-1/2 cursor-pointer items-center rounded-sm bg-white/75 p-[1px]"
+            style={{
+              left: `${mp.cx * 100}%`,
+              top: `${mp.cy * 100}%`,
+            }}
+          >
+            <JudgeMarkIcon type={a.judgeType} size={12} strokeWidth={3} />
+          </div>
+        )
+      })}
+    </>
   )
 }
 
@@ -246,9 +286,11 @@ function BlankMarksLayer({
 /** 答案/错因/解析回填预览：复用 answer-layout 算法（页面级相对坐标），位置与打印输出一致 */
 function BackfillPreview({
   annotation: a,
+  nextTopY,
   onSelect,
 }: {
   annotation: Annotation
+  nextTopY?: number
   onSelect: () => void
 }) {
   const { layers } = usePm()
@@ -265,6 +307,7 @@ function BackfillPreview({
     fullSolution: a.fullSolution,
     briefReason: a.briefReason,
     judgeType: a.judgeType,
+    nextTopY,
   })
   // 一题多空：答案已写入每个空内（BlankMarksLayer），跳过题级答案避免重复重叠
   const hasBlanks = a.blanks && a.blanks.length > 0

@@ -43,13 +43,33 @@ function defaultCorners(w: number, h: number): Pt[] {
 export function CornerEditor({ file, index, total, onDone, onCancel }: Props) {
   const imgRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
+  const boxRef = useRef<HTMLDivElement>(null)
   const bmpRef = useRef<ImageBitmap | null>(null)
   const [corners, setCorners] = useState<Pt[] | null>(null)
   const [size, setSize] = useState<{ w: number; h: number } | null>(null)
+  const [fit, setFit] = useState<{ w: number; h: number } | null>(null)
   const [detecting, setDetecting] = useState(true)
   const [filter, setFilter] = useState<EnhanceFilter>('color')
   const [processing, setProcessing] = useState(false)
   const dragIdx = useRef<number>(-1)
+
+  // v3：JS 计算适配尺寸（object-contain 数学），彻底修复 aspect-ratio 溢出/拉伸问题
+  //（ResizeObserver 首次 observe 即触发一次，尺寸/窗口变化时重算）
+  useEffect(() => {
+    const box = boxRef.current
+    if (!box || !size) return
+    const recompute = () => {
+      const cw = box.clientWidth
+      const ch = box.clientHeight
+      if (cw < 10 || ch < 10) return
+      const scale = Math.min(cw / size.w, ch / size.h)
+      setFit({ w: Math.floor(size.w * scale), h: Math.floor(size.h * scale) })
+    }
+    recompute()
+    const ro = new ResizeObserver(recompute)
+    ro.observe(box)
+    return () => ro.disconnect()
+  }, [size])
 
   // 加载 + 自动检测
   useEffect(() => {
@@ -191,16 +211,16 @@ export function CornerEditor({ file, index, total, onDone, onCancel }: Props) {
         </Button>
       </div>
 
-      {/* 编辑区：容器限定尺寸，aspect-ratio 包裹器保证画布完整可见且角点永不溢出 */}
-      <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden px-3">
+      {/* 编辑区：v3 用 JS 计算的适配尺寸包裹画布（永不溢出、永不拉伸） */}
+      <div ref={boxRef} className="flex min-h-0 flex-1 items-center justify-center overflow-hidden px-3">
         <div
           ref={wrapRef}
-          className="relative max-h-full max-w-full touch-none select-none"
-          style={{
-            aspectRatio: size ? `${size.w} / ${size.h}` : undefined,
-            width: size && size.w >= size.h ? '100%' : undefined,
-            height: size && size.w < size.h ? '100%' : undefined,
-          }}
+          className="relative touch-none select-none"
+          style={
+            fit
+              ? { width: `${fit.w}px`, height: `${fit.h}px` }
+              : { width: '80%', aspectRatio: '3 / 4' }
+          }
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp}

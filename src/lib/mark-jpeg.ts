@@ -13,12 +13,13 @@ import { normalizeLayers } from './pdf-render'
 import {
   computeBackfill,
   computeBlankMarks,
+  computeNextTops,
+  questionMarkPos,
   parseBlanks,
   truncateForBeside,
   cleanAnswerText,
   cleanSolutionText,
   cleanReasonText,
-  MARK_SIZE_Q,
 } from './answer-layout'
 
 const COLORS: Record<string, string> = {
@@ -36,10 +37,10 @@ function esc(s: string): string {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-/** 答案/错因/解析回填 SVG 片段（v2 小字号，与批注 PDF 同一套布局规则） */
-function backfillSvg(a: any, outW: number, outH: number, layers: RenderLayers): string[] {
+/** 答案/错因/解析回填 SVG 片段（v3 小字号，不压题） */
+function backfillSvg(a: any, outW: number, outH: number, layers: RenderLayers, nextTopY?: number): string[] {
   if (!layers.answers && !layers.reason && !layers.solution) return []
-  const plan = computeBackfill({ ...a, judgeType: a.judgeType })
+  const plan = computeBackfill({ ...a, judgeType: a.judgeType, nextTopY })
   // 一题多空：答案已写入每个空内（见 blankMarksSvg），跳过题级答案避免重复重叠
   const hasBlanks = parseBlanks(a.blanksJson).length > 0
   const sv: string[] = []
@@ -203,6 +204,8 @@ export async function renderAnnotatedJpegs(
       pageGetSum += a.getScore || 0
       pageFullSum += a.fullScore || 0
     }
+    // v3：下一题顶界限制回填位置
+    const nextTops = computeNextTops(list)
 
     // SVG 叠加层（与底图同尺寸）
     const sv: string[] = []
@@ -247,33 +250,38 @@ export async function renderAnnotatedJpegs(
         )
       }
 
-      // 题级判分标记（右上角内侧，v2 小号）
+      // 题级判分标记（题号旁，v3 小号）
       if (layers.marks) {
-        const markSize = Math.max(14, Math.min(bh * 0.55, MARK_SIZE_Q * outW, outW * 0.024))
-        const mx = bx + bw - markSize * 0.85
-        const my = by + markSize * 0.1
+        const mp = questionMarkPos({ x: a.roiX || 0, y: a.roiY || 0, w: a.roiW || 0, h: a.roiH || 0 })
+        const mx = mp.cx * outW
+        const my = mp.cy * outH
+        const markSize = Math.max(12, mp.size * outW)
         const { paths, widths } = judgeMarkPath(a.judgeType)
         const c = COLORS[a.judgeType] || COLORS.wrong
         paths.forEach((p, i) => {
           sv.push(
-            `<g transform="translate(${mx.toFixed(1)},${my.toFixed(1)}) scale(${(markSize / 24).toFixed(3)})"><path d="${p}" stroke="${c}" stroke-width="${widths[i]}" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>`
+            `<g transform="translate(${(mx - markSize / 2).toFixed(1)},${(my - markSize / 2).toFixed(1)}) scale(${(markSize / 24).toFixed(3)})"><path d="${p}" stroke="${c}" stroke-width="${widths[i]}" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>`
           )
         })
       }
 
-      // 每题得分（小字，框内右下角）
+      // 每题得分（小字，框内右下角；单空题已有空旁小得分，不重复）
       if (layers.scores) {
-        const fs2 = Math.max(9, Math.round(outW * 0.0085))
-        sv.push(
-          `<text x="${(bx + bw - 4).toFixed(1)}" y="${(by + bh - fs2 * 0.3).toFixed(1)}" font-size="${fs2}" font-family="sans-serif" font-weight="700" fill="${COLORS.scoreBg}" text-anchor="end">${a.getScore}/${a.fullScore}</text>`
-        )
+        const blanks = parseBlanks(a.blanksJson)
+        const singleBlankScored = blanks.length === 1 && blanks[0].fullScore > 0
+        if (!singleBlankScored) {
+          const fs2 = Math.max(9, Math.round(outW * 0.0085))
+          sv.push(
+            `<text x="${(bx + bw - 4).toFixed(1)}" y="${(by + bh - fs2 * 0.3).toFixed(1)}" font-size="${fs2}" font-family="sans-serif" font-weight="700" fill="${COLORS.scoreBg}" text-anchor="end">${a.getScore}/${a.fullScore}</text>`
+          )
+        }
       }
 
       // 每空小标记
       sv.push(...blankMarksSvg(a, outW, outH, layers))
 
-      // 答案/错因/解析回填
-      if (withImage) sv.push(...backfillSvg(a, outW, outH, layers))
+      // 答案/错因/解析回填（v3：下一题顶界限制，不压题）
+      if (withImage) sv.push(...backfillSvg(a, outW, outH, layers, nextTops?.get(a.id)))
     }
 
     const overlaySvg = Buffer.from(

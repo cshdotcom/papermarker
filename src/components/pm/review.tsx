@@ -19,9 +19,9 @@ import { PrintPanel } from './print-panel'
 import { JudgeMarkIcon } from './judge-icons'
 
 const JUDGE_INFO: Record<JudgeType, { label: string; color: string; bg: string; icon: any }> = {
-  correct: { label: '正确 √', color: 'text-emerald-700', bg: 'bg-emerald-100 border-emerald-300', icon: Check },
-  wrong: { label: '错误 ×', color: 'text-red-700', bg: 'bg-red-100 border-red-300', icon: X },
-  partial: { label: '半对 ⍻', color: 'text-amber-700', bg: 'bg-amber-100 border-amber-300', icon: null },
+  correct: { label: '正确', color: 'text-emerald-700', bg: 'bg-emerald-100 border-emerald-300', icon: Check },
+  wrong: { label: '错误', color: 'text-red-700', bg: 'bg-red-100 border-red-300', icon: X },
+  partial: { label: '半对', color: 'text-amber-700', bg: 'bg-amber-100 border-amber-300', icon: null },
 }
 export function Review({ taskId }: { taskId: string }) {
   const { setView, setTaskDetail, taskDetail, selectedAnnotationId, setSelected } = usePm()
@@ -286,7 +286,8 @@ export function Review({ taskId }: { taskId: string }) {
                               {a.questionText}
                             </span>
                             <span className={`shrink-0 font-semibold ${info.color}`}>{a.getScore}/{a.fullScore}</span>
-                            <Badge variant="outline" className={`shrink-0 px-1 text-[9px] ${info.bg}`}>
+                            <Badge variant="outline" className={`shrink-0 gap-1 px-1 text-[9px] ${info.bg}`}>
+                              <JudgeMarkIcon type={a.judgeType} size={10} strokeWidth={3.2} />
                               {info.label}
                             </Badge>
                           </button>

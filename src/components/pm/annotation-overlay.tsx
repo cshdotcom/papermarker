@@ -1,58 +1,11 @@
 'use client'
 
 import { useState } from 'react'
+import { ImageOff } from 'lucide-react'
 import { fileUrl, type Annotation } from '@/lib/pm'
 import { usePm } from '@/lib/pm-store'
-
-const JUDGE_COLOR: Record<string, string> = {
-  correct: '#16a34a',
-  wrong: '#dc2626',
-  partial: '#d97706',
-}
-
-function JudgeMark({ type, size = 22 }: { type: string; size?: number }) {
-  const c = JUDGE_COLOR[type] || JUDGE_COLOR.wrong
-  // √
-  if (type === 'correct') {
-    return (
-      <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-        <path
-          d="M4 12.5 L9.5 18 L20 6"
-          stroke={c}
-          strokeWidth="3"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    )
-  }
-  // ×
-  if (type === 'wrong') {
-    return (
-      <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-        <path d="M6 6 L18 18 M18 6 L6 18" stroke={c} strokeWidth="3" strokeLinecap="round" />
-      </svg>
-    )
-  }
-  // 半对：先打个完整的勾，勾的上方再打一个叉
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <path
-        d="M4 12.5 L9.5 18 L20 6"
-        stroke={c}
-        strokeWidth="3"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M9.2 1.2 L18.6 10.6 M18.6 1.2 L9.2 10.6"
-        stroke={c}
-        strokeWidth="2.6"
-        strokeLinecap="round"
-      />
-    </svg>
-  )
-}
+import { JudgeMarkIcon } from './judge-icons'
+import { computeBackfill, truncateForBeside, cleanAnswerText, cleanSolutionText } from '@/lib/answer-layout'
 
 export interface OverlayPage {
   pageNo: number
@@ -67,9 +20,15 @@ interface Props {
   pageScore?: { get: number; full: number }
 }
 
+/**
+ * 复核叠加层：题框 / 判分标记（矢量 ⍻）/ 得分 / 答案与解析回填预览。
+ * 答案回填与批注 PDF、Brother JPEG 使用同一套布局算法（answer-layout.ts），
+ * 界面所见 = 打印所得。
+ */
 export function AnnotationOverlay({ page, annotations, pageScore }: Props) {
   const { layers, selectedAnnotationId, setSelected, toggleLayer } = usePm()
   const [imgLoaded, setImgLoaded] = useState(false)
+  const [imgError, setImgError] = useState(false)
 
   const aspect = page.w && page.h ? page.w / page.h : 0.707
 
@@ -82,7 +41,7 @@ export function AnnotationOverlay({ page, annotations, pageScore }: Props) {
           ['boxes', '题框'],
           ['marks', '判分标记'],
           ['scores', '得分'],
-          ['answers', '答案'],
+          ['answers', '答案/解析回填'],
         ] as const).map(([k, label]) => (
           <button
             key={k}
@@ -109,17 +68,27 @@ export function AnnotationOverlay({ page, annotations, pageScore }: Props) {
         className="relative w-full overflow-hidden rounded-lg border bg-muted/30"
         style={{ aspectRatio: `1 / ${1 / aspect}` }}
       >
-        <img
-          src={fileUrl(page.fileId)}
-          alt={`试卷第${page.pageNo}页`}
-          className="absolute inset-0 h-full w-full object-contain"
-          onLoad={() => setImgLoaded(true)}
-        />
+        {!imgError ? (
+          <img
+            src={fileUrl(page.fileId)}
+            alt={`试卷第${page.pageNo}页`}
+            className="absolute inset-0 h-full w-full object-contain"
+            onLoad={() => setImgLoaded(true)}
+            onError={() => {
+              setImgLoaded(true)
+              setImgError(true)
+            }}
+          />
+        ) : (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-muted/40 text-muted-foreground">
+            <ImageOff className="h-8 w-8 opacity-50" />
+            <p className="text-xs">原图加载失败（文件可能已删除）</p>
+          </div>
+        )}
 
         {imgLoaded &&
           annotations.map((a) => {
             const selected = a.id === selectedAnnotationId
-            const color = JUDGE_COLOR[a.judgeType] || JUDGE_COLOR.wrong
             return (
               <div
                 key={a.id}
@@ -134,10 +103,10 @@ export function AnnotationOverlay({ page, annotations, pageScore }: Props) {
                   width: `${a.roi.w * 100}%`,
                   height: `${a.roi.h * 100}%`,
                   border: layers.boxes
-                    ? `2px solid ${selected ? color : 'rgba(37,99,235,0.65)'}`
+                    ? `2px solid ${selected ? (a.judgeType === 'correct' ? '#16a34a' : a.judgeType === 'wrong' ? '#dc2626' : '#d97706') : 'rgba(37,99,235,0.65)'}`
                     : '2px solid transparent',
-                  backgroundColor: selected ? `${color}22` : 'rgba(37,99,235,0.04)',
-                  boxShadow: selected ? `0 0 0 2px ${color}` : 'none',
+                  backgroundColor: selected ? 'rgba(16,185,129,0.08)' : 'rgba(37,99,235,0.04)',
+                  boxShadow: selected ? '0 0 0 2px rgba(16,185,129,0.5)' : 'none',
                 }}
               >
                 {/* 题号 */}
@@ -148,10 +117,10 @@ export function AnnotationOverlay({ page, annotations, pageScore }: Props) {
                   {a.questionText?.slice(0, 12) || '题'}
                 </span>
 
-                {/* 判分标记 右上角 */}
+                {/* 判分标记 右上角（矢量 ⍻） */}
                 {layers.marks && (
-                  <div className="absolute right-0.5 top-0.5 rounded bg-white/80 p-0.5">
-                    <JudgeMark type={a.judgeType} size={20} />
+                  <div className="absolute right-0.5 top-0.5 rounded bg-white/85 p-0.5">
+                    <JudgeMarkIcon type={a.judgeType} size={20} />
                   </div>
                 )}
 
@@ -161,17 +130,80 @@ export function AnnotationOverlay({ page, annotations, pageScore }: Props) {
                     {a.getScore}/{a.fullScore}
                   </div>
                 )}
-
-                {/* 答案 右下 */}
-                {layers.answers && a.answerText && (
-                  <div className="absolute bottom-0.5 right-0.5 max-w-[70%] truncate rounded bg-emerald-600/90 px-1 text-[10px] text-white">
-                    答：{a.answerText}
-                  </div>
-                )}
               </div>
             )
           })}
+
+        {/* 答案/解析回填预览（页面级坐标，与 PDF 同一套布局算法，不随题框缩放） */}
+        {imgLoaded &&
+          layers.answers &&
+          annotations.map((a) => <BackfillPreview key={`bf-${a.id}`} annotation={a} onSelect={() => setSelected(a.id)} />)}
       </div>
     </div>
+  )
+}
+
+/** 答案/解析回填预览：复用 answer-layout 算法（页面级相对坐标），位置与打印输出一致 */
+function BackfillPreview({
+  annotation: a,
+  onSelect,
+}: {
+  annotation: Annotation
+  onSelect: () => void
+}) {
+  const plan = computeBackfill({
+    roiX: a.roi.x,
+    roiY: a.roi.y,
+    roiW: a.roi.w,
+    roiH: a.roi.h,
+    answerRoiX: a.answerRoi?.x,
+    answerRoiY: a.answerRoi?.y,
+    answerRoiW: a.answerRoi?.w,
+    answerRoiH: a.answerRoi?.h,
+    answerText: a.answerText,
+    fullSolution: a.fullSolution,
+    briefReason: a.briefReason,
+    judgeType: a.judgeType,
+  })
+  if (!plan.answer && !plan.solution) return null
+
+  return (
+    <>
+      {plan.answer && (
+        <div
+          onClick={(e) => {
+            e.stopPropagation()
+            onSelect()
+          }}
+          className="absolute flex cursor-pointer items-center overflow-hidden rounded bg-emerald-600/15 px-1 text-[10px] font-bold leading-tight text-emerald-700 ring-1 ring-emerald-600/25"
+          style={{
+            left: `${plan.answer.x * 100}%`,
+            top: `${plan.answer.y * 100}%`,
+            width: `${plan.answer.w * 100}%`,
+            height: `${plan.answer.h * 100}%`,
+          }}
+        >
+          <span className="truncate">
+            答：
+            {plan.answer.mode === 'beside-mark' || plan.answer.mode === 'inline'
+              ? truncateForBeside(cleanAnswerText(a.answerText), 12)
+              : cleanAnswerText(a.answerText)}
+          </span>
+        </div>
+      )}
+      {plan.solution && (
+        <div
+          className="pointer-events-none absolute flex items-center overflow-hidden px-1 text-[9px] leading-tight text-slate-500"
+          style={{
+            left: `${plan.solution.x * 100}%`,
+            top: `${plan.solution.y * 100}%`,
+            width: `${plan.solution.w * 100}%`,
+            height: `${plan.solution.h * 100}%`,
+          }}
+        >
+          <span className="truncate">析：{cleanSolutionText(a.fullSolution || a.briefReason).slice(0, 40)}</span>
+        </div>
+      )}
+    </>
   )
 }

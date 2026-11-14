@@ -1,24 +1,26 @@
 'use client'
 
 import { useState } from 'react'
-import { PenLine, Loader2, LogIn, KeyRound, Info } from 'lucide-react'
+import { PenLine, Loader2, LogIn, KeyRound, ShieldCheck } from 'lucide-react'
 import { api } from '@/lib/pm'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 
 interface Props {
   onLogin: (username: string) => void
 }
 
 /**
- * 登录门禁：必须输入账号密码才能进入 PaperMarker
- * 默认演示账号 teacher / papermarker（可在数据库中修改）
+ * 登录门禁：必须输入账号密码才能进入 PaperMarker（已关闭自动登录）
+ * 默认演示账号 teacher / papermarker（登录后可在设置中修改密码）
  */
 export function LoginView({ onLogin }: Props) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [remember, setRemember] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -31,7 +33,7 @@ export function LoginView({ onLogin }: Props) {
     setLoading(true)
     setError(null)
     try {
-      const r = await api.login(username.trim(), password)
+      const r = await api.login(username.trim(), password, remember)
       if (r?.code === 200 || r?.token) {
         onLogin(r?.user?.username || username.trim())
       } else {
@@ -98,6 +100,18 @@ export function LoginView({ onLogin }: Props) {
                   </p>
                 )}
 
+                <label
+                  className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground"
+                  htmlFor="remember"
+                >
+                  <Checkbox
+                    id="remember"
+                    checked={remember}
+                    onCheckedChange={(v) => setRemember(v === true)}
+                  />
+                  记住我（7 天内免登录；不勾选则关闭浏览器后需重新登录）
+                </label>
+
                 <Button
                   type="submit"
                   disabled={loading}
@@ -118,10 +132,10 @@ export function LoginView({ onLogin }: Props) {
               </form>
 
               <div className="mt-4 flex items-start gap-1.5 rounded-md bg-muted/60 px-2.5 py-2 text-[11px] text-muted-foreground">
-                <Info className="mt-0.5 h-3 w-3 shrink-0" />
+                <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0 text-emerald-600" />
                 <span>
                   首次部署默认账号 <code className="font-semibold">teacher</code> / 密码{' '}
-                  <code className="font-semibold">papermarker</code>，登录后可在设置中创建应用连接 API Key。
+                  <code className="font-semibold">papermarker</code>，登录后请在「设置 → 账号安全」中修改密码。
                 </span>
               </div>
             </CardContent>

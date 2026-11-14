@@ -9,6 +9,7 @@
 import sharp from 'sharp'
 import fs from 'fs'
 import type { PageImage } from './pdf-render'
+import { computeBackfill, truncateForBeside, cleanAnswerText, cleanSolutionText } from './answer-layout'
 
 const COLORS: Record<string, string> = {
   correct: '#16a34a',
@@ -20,6 +21,40 @@ const COLORS: Record<string, string> = {
 
 function esc(s: string): string {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/** 答案/解析回填 SVG 片段（与批注 PDF 同一套布局规则） */
+function backfillSvg(a: any, outW: number, outH: number): string[] {
+  const plan = computeBackfill({ ...a, judgeType: a.judgeType })
+  const sv: string[] = []
+  const toAbs = (b: { x: number; y: number; w: number; h: number }) => ({
+    x: b.x * outW,
+    y: b.y * outH,
+    w: b.w * outW,
+    h: b.h * outH,
+  })
+  if (plan.answer) {
+    const b = toAbs(plan.answer)
+    const beside = plan.answer.mode === 'beside-mark' || plan.answer.mode === 'inline'
+    const cleaned = cleanAnswerText(a.answerText)
+    if (!cleaned && !plan.solution) return sv
+    const text = beside ? truncateForBeside(cleaned, 14) : cleaned
+    const fs = Math.max(11, Math.min(b.h * (beside ? 0.72 : 0.62), outW * 0.014))
+    sv.push(
+      `<rect x="${(b.x - 3).toFixed(1)}" y="${(b.y - 2).toFixed(1)}" width="${(b.w + 6).toFixed(1)}" height="${(b.h + 4).toFixed(1)}" rx="3" fill="#16a34a" fill-opacity="0.12"/>`
+    )
+    sv.push(
+      `<text x="${b.x.toFixed(1)}" y="${(b.y + b.h * 0.78).toFixed(1)}" font-size="${fs.toFixed(1)}" font-family="sans-serif" font-weight="700" fill="#15803d">答：${esc(text)}</text>`
+    )
+  }
+  if (plan.solution) {
+    const b = toAbs(plan.solution)
+    const fs = Math.max(9, Math.min(b.h * 0.55, outW * 0.011))
+    sv.push(
+      `<text x="${b.x.toFixed(1)}" y="${(b.y + b.h * 0.8).toFixed(1)}" font-size="${fs.toFixed(1)}" font-family="sans-serif" fill="#6b7280">析：${esc(cleanSolutionText(a.fullSolution || a.briefReason).slice(0, 60))}</text>`
+    )
+  }
+  return sv
 }
 
 /** 生成判分标记的 SVG path（viewBox 24x24，与前端同款） */
@@ -129,6 +164,9 @@ export async function renderAnnotatedJpegs(
       sv.push(
         `<text x="${(bx + bw - 4).toFixed(1)}" y="${(by + bh + fs2).toFixed(1)}" font-size="${fs2}" font-family="sans-serif" font-weight="700" fill="${COLORS.scoreBg}" text-anchor="end">${a.getScore}/${a.fullScore}</text>`
       )
+
+      // 答案/解析回填（withImage 模式；纯标记层套印不回填）
+      if (withImage) sv.push(...backfillSvg(a, outW, outH))
     }
 
     const overlaySvg = Buffer.from(

@@ -17,6 +17,8 @@ import {
   Trash2,
   Power,
   Smartphone,
+  ShieldCheck,
+  UserRound,
 } from 'lucide-react'
 import {
   api,
@@ -25,6 +27,7 @@ import {
   type ScannerCaps,
   type ApiKeyInfo,
 } from '@/lib/pm'
+import { usePm } from '@/lib/pm-store'
 import { useToast } from '@/hooks/use-toast'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -58,6 +61,40 @@ export function Settings() {
   const [origin, setOrigin] = useState('')
 
   const { toast } = useToast()
+
+  // 账号安全（修改密码）
+  const username = usePm((s) => s.username)
+  const [oldPw, setOldPw] = useState('')
+  const [newPw, setNewPw] = useState('')
+  const [newPw2, setNewPw2] = useState('')
+  const [changingPw, setChangingPw] = useState(false)
+
+  const changePassword = async () => {
+    if (!oldPw || !newPw || !newPw2) {
+      toast({ title: '请完整填写三项密码', variant: 'destructive' })
+      return
+    }
+    if (newPw !== newPw2) {
+      toast({ title: '两次输入的新密码不一致', variant: 'destructive' })
+      return
+    }
+    if (newPw.length < 6) {
+      toast({ title: '新密码至少 6 位', variant: 'destructive' })
+      return
+    }
+    setChangingPw(true)
+    try {
+      const r = await api.changePassword(oldPw, newPw)
+      toast({ title: '密码修改成功', description: r.msg || '下次登录请使用新密码' })
+      setOldPw('')
+      setNewPw('')
+      setNewPw2('')
+    } catch (e: any) {
+      toast({ title: '修改失败', description: e.message, variant: 'destructive' })
+    } finally {
+      setChangingPw(false)
+    }
+  }
 
   const fetchCfg = async () => {
     setLoading(true)
@@ -169,6 +206,81 @@ export function Settings() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-4">
+      {/* ============ 账号安全（修改密码） ============ */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <ShieldCheck className="h-4 w-4 text-emerald-600" />
+            账号安全
+          </CardTitle>
+          <CardDescription>
+            当前账号 <code className="rounded bg-muted px-1 font-semibold">{username || 'teacher'}</code>
+            ，修改密码后下次登录生效
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="oldPw" className="text-xs">
+                旧密码
+              </Label>
+              <Input
+                id="oldPw"
+                type="password"
+                autoComplete="current-password"
+                value={oldPw}
+                onChange={(e) => setOldPw(e.target.value)}
+                disabled={changingPw}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="newPw" className="text-xs">
+                新密码（≥6位）
+              </Label>
+              <Input
+                id="newPw"
+                type="password"
+                autoComplete="new-password"
+                value={newPw}
+                onChange={(e) => setNewPw(e.target.value)}
+                disabled={changingPw}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="newPw2" className="text-xs">
+                确认新密码
+              </Label>
+              <Input
+                id="newPw2"
+                type="password"
+                autoComplete="new-password"
+                value={newPw2}
+                onChange={(e) => setNewPw2(e.target.value)}
+                disabled={changingPw}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') changePassword()
+                }}
+              />
+            </div>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
+              <UserRound className="h-3 w-3" />
+              网站已关闭自动登录，每次访问需输入账号密码（勾选「记住我」可 7 天免登录）
+            </p>
+            <Button
+              size="sm"
+              onClick={changePassword}
+              disabled={changingPw || !oldPw || !newPw || !newPw2}
+              className="shrink-0 bg-emerald-600 hover:bg-emerald-700"
+            >
+              {changingPw ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <KeyRound className="mr-1 h-3.5 w-3.5" />}
+              修改密码
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* ============ 打印机配置 ============ */}
       <Card>
         <CardHeader>

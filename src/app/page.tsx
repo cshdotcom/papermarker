@@ -103,7 +103,7 @@ export default function Home() {
       {/* Header（桌面端主导航） */}
       <header className="sticky top-0 z-30 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <div className="mx-auto flex h-14 max-w-7xl items-center gap-3 px-4">
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-600 text-white">
               <PenLine className="h-4 w-4" />
             </div>
@@ -115,7 +115,7 @@ export default function Home() {
             </div>
           </div>
 
-          <nav className="ml-auto hidden items-center gap-1 md:flex">
+          <nav className="mx-auto hidden items-center gap-1 md:flex">
             <Button
               variant={view === 'scan' ? 'default' : 'ghost'}
               size="sm"
@@ -126,10 +126,10 @@ export default function Home() {
               扫描
             </Button>
             <Button
-              variant={view === 'dashboard' ? 'default' : 'ghost'}
+              variant={view === 'dashboard' || view === 'review' ? 'default' : 'ghost'}
               size="sm"
               onClick={() => setView('dashboard')}
-              className={view === 'dashboard' ? 'bg-emerald-600 hover:bg-emerald-700' : ''}
+              className={view === 'dashboard' || view === 'review' ? 'bg-emerald-600 hover:bg-emerald-700' : ''}
             >
               <LayoutDashboard className="mr-1.5 h-4 w-4" />
               任务
@@ -146,7 +146,7 @@ export default function Home() {
           </nav>
 
           {/* 用户区 */}
-          <div className="ml-auto flex items-center gap-2 md:ml-2">
+          <div className="ml-auto flex shrink-0 items-center gap-2 md:ml-0">
             <span className="hidden rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 sm:inline">
               {username || '用户'}
             </span>
@@ -165,7 +165,7 @@ export default function Home() {
       </header>
 
       {/* Main（移动端为底部导航预留空间） */}
-      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-6">
+      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 pb-[calc(6.5rem_+_env(safe-area-inset-bottom))] md:pb-6">
         {view === 'scan' && <ScanView />}
         {view === 'dashboard' && <Dashboard onOpenTask={openTask} />}
         {view === 'review' && currentTaskId && <Review taskId={currentTaskId} />}
@@ -186,7 +186,7 @@ export default function Home() {
         </div>
       </footer>
 
-      {/* 移动端底部导航（APP 式） */}
+      {/* 移动端底部导航（APP 式，含安全区） */}
       <nav className="fixed bottom-0 left-0 right-0 z-40 border-t bg-background/95 backdrop-blur md:hidden">
         <div className="grid grid-cols-3 pb-[env(safe-area-inset-bottom)]">
           {NAV.map((n) => {
@@ -196,10 +196,12 @@ export default function Home() {
               <button
                 key={n.key}
                 onClick={() => setView(n.key)}
-                className={`flex h-16 flex-col items-center justify-center gap-1 text-[11px] transition ${
+                className={`relative flex h-16 flex-col items-center justify-center gap-1 text-[11px] transition ${
                   active ? 'text-emerald-600' : 'text-muted-foreground'
                 }`}
+                aria-label={n.label}
               >
+                {active && <span className="absolute top-0 h-0.5 w-8 rounded-full bg-emerald-600" />}
                 <Icon className="h-5 w-5" />
                 {n.label}
               </button>

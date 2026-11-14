@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authGuard } from '@/lib/auth'
 import { db } from '@/lib/db'
+import { absPath } from '@/lib/storage'
+import fs from 'fs'
 
 export async function GET(
   req: NextRequest,
@@ -73,6 +75,10 @@ export async function GET(
         reviewStatus: a.reviewStatus,
         originJudgeType: a.originJudgeType,
         originGetScore: a.originGetScore,
+        answerRoi:
+          a.answerRoiX != null && a.answerRoiW != null
+            ? { x: a.answerRoiX, y: a.answerRoiY!, w: a.answerRoiW, h: a.answerRoiH! }
+            : null,
       })),
       pages: task.pages.map((p) => ({
         pageNo: p.pageNo,
@@ -87,4 +93,32 @@ export async function GET(
       parsePdfFileId: parsePdf?.id,
     },
   })
+}
+
+/** 删除任务（连同批注/页面/文件记录，并清理磁盘文件） */
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const auth = await authGuard(req)
+  if (!auth.ok) return auth.resp
+  const { id } = await params
+
+  const task = await db.task.findFirst({ where: { id, userId: auth.uid } })
+  if (!task) {
+    return NextResponse.json({ code: 404, msg: '任务不存在' }, { status: 404 })
+  }
+
+  // 先取出文件路径，删除后清理磁盘
+  const files = await db.file.findMany({ where: { taskId: id } })
+  await db.task.delete({ where: { id } }) // 级联删除 annotations/pages/files/subtasks
+
+  for (const f of files) {
+    try {
+      const abs = absPath(f.filePath)
+      if (fs.existsSync(abs)) fs.unlinkSync(abs)
+    } catch {}
+  }
+
+  return NextResponse.json({ code: 200, msg: '任务已删除' })
 }

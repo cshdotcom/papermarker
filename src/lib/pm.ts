@@ -22,6 +22,8 @@ export interface Annotation {
   reviewStatus: 'ai_only' | 'reviewed' | 'skipped'
   originJudgeType: JudgeType | null
   originGetScore: number | null
+  /** 题目作答空白区（VLM 识别，可能为空） */
+  answerRoi: RoiRect | null
 }
 
 export interface TaskSummary {
@@ -111,16 +113,21 @@ export interface TrayPage {
 // ---------- API 客户端 ----------
 const TOKEN_KEY = 'pm_token'
 
-export function setStoredToken(token: string | null) {
+export function setStoredToken(token: string | null, remember = true) {
   try {
-    if (token) localStorage.setItem(TOKEN_KEY, token)
-    else localStorage.removeItem(TOKEN_KEY)
+    // 两处都清，避免残留
+    localStorage.removeItem(TOKEN_KEY)
+    sessionStorage.removeItem(TOKEN_KEY)
+    if (token) {
+      // 记住我 → localStorage（7天）；否则 sessionStorage（关浏览器即退出，关闭自动登录）
+      ;(remember ? localStorage : sessionStorage).setItem(TOKEN_KEY, token)
+    }
   } catch {}
 }
 
 function getStoredToken(): string | null {
   try {
-    return localStorage.getItem(TOKEN_KEY)
+    return localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY)
   } catch {
     return null
   }
@@ -138,12 +145,24 @@ function authHeaders(): Record<string, string> {
   return t ? { Authorization: `Bearer ${t}` } : {}
 }
 
-async function jfetch<T = any>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(init?.headers || {}) },
-    ...init,
-  })
+async function jfetch<T = any>(url: string, init?: RequestInit & { timeoutMs?: number }): Promise<T> {
+  const { timeoutMs, ...rest } = init || {}
+  const ctrl = new AbortController()
+  const timer = timeoutMs ? setTimeout(() => ctrl.abort(), timeoutMs) : null
+  let res: Response
+  try {
+    res = await fetch(url, {
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(rest?.headers || {}) },
+      ...rest,
+      signal: ctrl.signal,
+    })
+  } catch (e: any) {
+    if (e?.name === 'AbortError') throw new Error('请求超时，请检查网络后重试')
+    throw e
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
   const text = await res.text()
   let json: any = {}
   try { json = text ? JSON.parse(text) : {} } catch { json = { raw: text } }
@@ -152,17 +171,22 @@ async function jfetch<T = any>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  login: async (username: string, password: string) => {
+  login: async (username: string, password: string, remember = false) => {
     const r = await jfetch<{ token?: string; user?: { id: string; username: string } }>(
       '/api/auth/login',
       {
         method: 'POST',
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username, password, remember }),
       }
     )
-    if (r?.token) setStoredToken(r.token)
+    if (r?.token) setStoredToken(r.token, remember)
     return r
   },
+  changePassword: (oldPassword: string, newPassword: string) =>
+    jfetch<{ code: number; msg: string }>('/api/auth/password', {
+      method: 'PUT',
+      body: JSON.stringify({ oldPassword, newPassword }),
+    }),
   logout: () => {
     setStoredToken(null)
     try {
@@ -171,23 +195,9 @@ export const api = {
   },
   me: () => jfetch<{ user: { id: string; username: string } }>('/api/auth/me'),
   listTasks: () => jfetch<{ tasks: TaskSummary[] }>('/api/tasks'),
-  getTask: (id: string) => jfetch<{ task: TaskDetail }>(`/api/tasks/${id}`),
-  uploadImage: (file: File, paperName: string, studentName: string) => {
-    const fd = new FormData()
-    fd.append('images', file)
-    fd.append('paperName', paperName)
-    fd.append('studentName', studentName)
-    return fetch('/api/upload', {
-      method: 'POST',
-      body: fd,
-      credentials: 'include',
-      headers: authHeaders(),
-    }).then(async (r) => {
-      const j = await r.json()
-      if (!r.ok) throw new Error(j.msg || '上传失败')
-      return j
-    })
-  },
+  getTask: (id: string) =>
+    jfetch<{ task: TaskDetail }>(`/api/tasks/${id}`, { timeoutMs: 20000 }),
+  deleteTask: (id: string) => jfetch(`/api/tasks/${id}`, { method: 'DELETE', timeoutMs: 20000 }),
   updateAnnotation: (patch: any) =>
     jfetch('/api/annotation', { method: 'PATCH', body: JSON.stringify(patch) }),
   batchReview: (taskId: string, action: 'review_all' | 'reset_ai') =>

@@ -39,6 +39,7 @@ interface TrayItem extends TrayPage {
 export function ScanView() {
   const isMobile = useIsMobile()
   const { openTask } = usePm()
+  const consumePendingScanFiles = usePm((s) => s.consumePendingScanFiles)
   const { toast } = useToast()
 
   const [mode, setMode] = useState<'camera' | 'scanner'>('scanner')
@@ -55,6 +56,14 @@ export function ScanView() {
   useEffect(() => {
     setMode(isMobile ? 'camera' : 'scanner')
   }, [isMobile])
+
+  // 消费全局待剪辑队列（Dashboard 拍照/选图 → 跳到本页 → 弹出四角剪辑器）
+  useEffect(() => {
+    const queued = consumePendingScanFiles()
+    if (queued.length > 0) {
+      setPendingFiles((q) => [...q, ...queued])
+    }
+  }, [])
 
   // 载入托盘 + 扫描仪配置
   const loadTray = useCallback(async () => {

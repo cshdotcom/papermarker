@@ -23,6 +23,8 @@ export interface AiQuestion {
   briefReason: string
   fullSolution: string
   answerText: string
+  /** 题目作答空白区（用于答案回填），可为空 */
+  answerRoi?: RoiRect | null
 }
 export interface AiGradeResult {
   paperName: string
@@ -40,6 +42,7 @@ const SYSTEM_PROMPT = `你是一名严谨、有经验的阅卷老师。请分析
 3. 给出每题满分、得分、扣分原因、完整解析、标准答案。
 4. 统计试卷总分与得分。
 5. 每题标注所在页码 pageNo（第几张图片即为第几页）。
+6. 若题目下方/旁边有学生作答的空白区域，给出 answerRoi（该空白区域的相对坐标）；题目没有空白位置（如选择题）则省略 answerRoi。答案回填时优先写入该空白处。
 
 严格只返回 JSON（不要 markdown 代码块、不要解释文字），结构如下：
 {
@@ -52,17 +55,18 @@ const SYSTEM_PROMPT = `你是一名严谨、有经验的阅卷老师。请分析
       "pageNo": 1,
       "questionText": "第1题 ...",
       "roi": { "x": 0.05, "y": 0.10, "w": 0.90, "h": 0.08 },
+      "answerRoi": { "x": 0.10, "y": 0.14, "w": 0.80, "h": 0.03 },
       "fullScore": 5,
       "getScore": 5,
       "judge": "correct",
       "confidence": 0.9,
       "briefReason": "解题过程完整正确",
-      "fullSolution": "解析：由 ... 得 ...",
-      "answerText": "标准答案：..."
+      "fullSolution": "由 ... 得 ...",
+      "answerText": "29"
     }
   ]
 }
-roi 坐标为相对图片宽高比例（0~1）。每题 roi 尽量贴合该题作答区域。`
+roi 坐标为相对图片宽高比例（0~1）。每题 roi 尽量贴合该题作答区域。answerRoi 必须位于该题 roi 之内或紧邻，表示可写入正确答案的空白位置；answerText 只写答案本身（不要加「标准答案：」等前缀），fullSolution 不要加「解析：」前缀。`
 
 function extractJson(text: string): any | null {
   if (!text) return null
@@ -91,12 +95,28 @@ function normalizeJudge(j: any): JudgeType {
 
 function normalizeQuestions(raw: any[]): AiQuestion[] {
   const out: AiQuestion[] = []
+  const strip = (s: string) =>
+    String(s || '')
+      .replace(/^标准答案[:：]?\s*/, '')
+      .replace(/^解析[:：]?\s*/, '')
+      .trim()
   for (const q of raw) {
     const roi = q.roi || {}
     const full = Number(q.fullScore ?? q.full_score ?? 0) || 0
     let get = Number(q.getScore ?? q.get_score ?? 0) || 0
     if (get > full) get = full
     if (get < 0) get = 0
+    // 作答空白区（可选）：坐标有效才保留
+    let answerRoi: RoiRect | null = null
+    const ar = q.answerRoi || q.answer_roi
+    if (ar && Number(ar.x) >= 0 && Number(ar.w) >= 0.1 && Number(ar.h) >= 0.018) {
+      answerRoi = {
+        x: clamp01(Number(ar.x)),
+        y: clamp01(Number(ar.y)),
+        w: clamp01(Number(ar.w ?? ar.width ?? 0)),
+        h: clamp01(Number(ar.h ?? ar.height ?? 0)),
+      }
+    }
     out.push({
       pageNo: Number(q.pageNo ?? 1) || 1,
       questionText: String(q.questionText ?? q.question_text ?? q.title ?? '未命名题目'),
@@ -111,8 +131,9 @@ function normalizeQuestions(raw: any[]): AiQuestion[] {
       judge: normalizeJudge(q.judge ?? q.judge_type),
       confidence: clamp01(Number(q.confidence ?? 0.6)),
       briefReason: String(q.briefReason ?? q.reason ?? ''),
-      fullSolution: String(q.fullSolution ?? q.solution ?? ''),
-      answerText: String(q.answerText ?? q.answer ?? ''),
+      fullSolution: strip(String(q.fullSolution ?? q.solution ?? '')),
+      answerText: strip(String(q.answerText ?? q.answer ?? '')),
+      answerRoi,
     })
   }
   return out
@@ -125,10 +146,11 @@ function clamp01(n: number): number {
 
 /** 当 VLM 失败或无法解析时，生成一组占位批改结果以保证界面流程可演示 */
 export function syntheticResult(pageCount = 1): AiGradeResult {
-  const base: Omit<AiQuestion, 'pageNo'>[] = [
+  const base: (Omit<AiQuestion, 'pageNo'> & { answerRoi?: RoiRect | null })[] = [
     {
       questionText: '第1题 计算 12 + 17 = ?',
       roi: { x: 0.05, y: 0.08, w: 0.9, h: 0.1 },
+      answerRoi: { x: 0.12, y: 0.135, w: 0.6, h: 0.03 },
       fullScore: 5,
       getScore: 5,
       judge: 'correct',
@@ -138,9 +160,9 @@ export function syntheticResult(pageCount = 1): AiGradeResult {
       answerText: '29',
     },
     {
-      pageNo: 1,
       questionText: '第2题 解方程 2x + 6 = 14',
       roi: { x: 0.05, y: 0.20, w: 0.9, h: 0.12 },
+      answerRoi: { x: 0.12, y: 0.26, w: 0.66, h: 0.035 },
       fullScore: 8,
       getScore: 6,
       judge: 'partial',
@@ -150,9 +172,9 @@ export function syntheticResult(pageCount = 1): AiGradeResult {
       answerText: 'x = 4',
     },
     {
-      pageNo: 1,
       questionText: '第3题 化简 a(b+c)',
       roi: { x: 0.05, y: 0.34, w: 0.9, h: 0.1 },
+      // 无空白区（演示：答案填在标记旁边）
       fullScore: 5,
       getScore: 0,
       judge: 'wrong',
@@ -162,9 +184,9 @@ export function syntheticResult(pageCount = 1): AiGradeResult {
       answerText: 'ab + ac',
     },
     {
-      pageNo: 1,
       questionText: '第4题 求三角形面积（底6高4）',
       roi: { x: 0.05, y: 0.46, w: 0.9, h: 0.12 },
+      answerRoi: { x: 0.12, y: 0.53, w: 0.62, h: 0.032 },
       fullScore: 6,
       getScore: 6,
       judge: 'correct',
@@ -174,9 +196,9 @@ export function syntheticResult(pageCount = 1): AiGradeResult {
       answerText: '12',
     },
     {
-      pageNo: 1,
       questionText: '第5题 应用题：路程计算',
       roi: { x: 0.05, y: 0.60, w: 0.9, h: 0.14 },
+      answerRoi: { x: 0.10, y: 0.68, w: 0.78, h: 0.035 },
       fullScore: 10,
       getScore: 7,
       judge: 'partial',
@@ -186,16 +208,16 @@ export function syntheticResult(pageCount = 1): AiGradeResult {
       answerText: '60 km/h',
     },
     {
-      pageNo: 1,
       questionText: '第6题 几何证明',
       roi: { x: 0.05, y: 0.76, w: 0.9, h: 0.16 },
+      answerRoi: { x: 0.10, y: 0.84, w: 0.8, h: 0.04 },
       fullScore: 10,
       getScore: 4,
       judge: 'partial',
       confidence: 0.65,
       briefReason: '证明思路对，但缺少关键步骤说明',
       fullSolution: '由已知条件可证两三角形全等，进而推出对应角相等。',
-      answerText: '略',
+      answerText: '见解析',
     },
   ]
   // 多页时把题目均匀分布到各页，便于演示多页任务
@@ -310,6 +332,10 @@ export async function persistGrade(taskId: string, r: AiGradeResult) {
         reviewStatus: 'ai_only',
         originJudgeType: q.judge,
         originGetScore: q.getScore,
+        answerRoiX: q.answerRoi?.x ?? null,
+        answerRoiY: q.answerRoi?.y ?? null,
+        answerRoiW: q.answerRoi?.w ?? null,
+        answerRoiH: q.answerRoi?.h ?? null,
       },
     })
   }

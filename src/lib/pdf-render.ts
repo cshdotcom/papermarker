@@ -3,6 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import { db } from './db'
 import { pdfDir, relPath, absPath } from './storage'
+import { computeBackfill, truncateForBeside, cleanAnswerText, cleanSolutionText } from './answer-layout'
 
 export type JudgeType = 'correct' | 'wrong' | 'partial'
 
@@ -170,6 +171,68 @@ function annotationRect(rect: { x: number; y: number; w: number; h: number }, a:
 }
 
 /**
+ * 答案/解析回填（用户需求）：
+ *  - 有空白位置（answerRoi / ROI 下部富余）→ 答案写入空白处，解析紧随其后
+ *  - 没有位置 → 答案写在勾勾叉叉旁边（短文本），解析省略
+ */
+function drawBackfill(
+  doc: PDFDocument,
+  rect: { x: number; y: number; w: number; h: number },
+  a: any
+) {
+  const plan = computeBackfill({ ...a, judgeType: a.judgeType })
+  if (!plan.answer && !plan.solution) return
+
+  const toAbs = (b: { x: number; y: number; w: number; h: number }) => ({
+    x: rect.x + b.x * rect.w,
+    y: rect.y + b.y * rect.h,
+    w: b.w * rect.w,
+    h: b.h * rect.h,
+  })
+
+  if (plan.answer) {
+    const b = toAbs(plan.answer)
+    const beside = plan.answer.mode === 'beside-mark' || plan.answer.mode === 'inline'
+    const cleaned = cleanAnswerText(a.answerText)
+    const text = beside ? truncateForBeside(cleaned, 14) : cleaned
+    if (!text && !plan.solution) return
+    const fs_ = beside ? Math.max(7.5, Math.min(b.h * 0.72, 9.5)) : Math.max(8, Math.min(b.h * 0.62, 11))
+    // 答案底色（淡绿）+ 绿色手写风文字
+    doc.save()
+    doc.roundedRect(b.x - 2, b.y - 1, b.w + 4, b.h + 2, 3)
+    doc.fillOpacity(0.12).fill('#16a34a')
+    doc.restore()
+    doc
+      .fontSize(fs_)
+      .fillColor('#15803d')
+      .font(F_BOLD)
+      .text(`答：${text}`, b.x, b.y + (b.h - fs_) / 2 - 1, {
+        width: b.w,
+        height: b.h,
+        ellipsis: true,
+        lineBreak: false,
+        align: 'left',
+      })
+  }
+
+  if (plan.solution) {
+    const b = toAbs(plan.solution)
+    const fs_ = Math.max(6.5, Math.min(b.h * 0.55, 8.5))
+    doc
+      .fontSize(fs_)
+      .fillColor('#6b7280')
+      .font(F_REG)
+      .text(`析：${cleanSolutionText(a.fullSolution || a.briefReason)}`, b.x, b.y + (b.h - fs_) / 2 - 1, {
+        width: b.w,
+        height: b.h,
+        ellipsis: true,
+        lineBreak: false,
+        align: 'left',
+      })
+  }
+}
+
+/**
  * 渲染批注 PDF：逐页原图 + 题框 + √/×/半对 + 右上角分数
  */
 export async function renderMarkPdf(
@@ -254,6 +317,9 @@ export async function renderMarkPdf(
             width: bw - 8,
             align: 'right',
           })
+
+        // 答案/解析回填（有空白写空白处，没空白写在标记旁）
+        drawBackfill(doc, rect, a)
       }
     })
 
@@ -360,7 +426,7 @@ export async function renderAnswerPdf(
       }
       doc.font(F_BOLD).fontSize(12).fillColor('#111827').text(`${i + 1}. ${a.questionText}`, 48, y, { width: A4_W - 96 })
       y = doc.y + 2
-      doc.font(F_REG).fontSize(11).fillColor('#059669').text(`标准答案：${a.answerText || '—'}`, 64, y, { width: A4_W - 112 })
+      doc.font(F_REG).fontSize(11).fillColor('#059669').text(`标准答案：${cleanAnswerText(a.answerText) || '—'}`, 64, y, { width: A4_W - 112 })
       y = doc.y + 2
       doc.font(F_REG).fillColor('#6b7280').text(`满分 ${a.fullScore}`, 64, y, { width: A4_W - 112 })
       y = doc.y + 14
@@ -401,10 +467,10 @@ export async function renderParsePdf(
       doc.font(F_BOLD).fontSize(12).fillColor('#111827').text(`${i + 1}. ${a.questionText}  (${a.getScore}/${a.fullScore})`, 48, y, { width: A4_W - 96 })
       y = doc.y + 2
       if (a.briefReason) {
-        doc.font(F_REG).fontSize(10).fillColor('#b45309').text(`点评：${a.briefReason}`, 64, y, { width: A4_W - 112 })
+        doc.font(F_REG).fontSize(10).fillColor('#b45309').text(`点评：${cleanSolutionText(a.briefReason)}`, 64, y, { width: A4_W - 112 })
         y = doc.y + 2
       }
-      doc.font(F_REG).fontSize(11).fillColor('#1f2937').text(`解析：${a.fullSolution || '—'}`, 64, y, { width: A4_W - 112 })
+      doc.font(F_REG).fontSize(11).fillColor('#1f2937').text(`解析：${cleanSolutionText(a.fullSolution) || '—'}`, 64, y, { width: A4_W - 112 })
       y = doc.y + 16
     })
 

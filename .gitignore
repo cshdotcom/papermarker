@@ -66,3 +66,5 @@ server.log
 /examples/
 /brother-pkg/
 /db/
+tool-results/
+*.log

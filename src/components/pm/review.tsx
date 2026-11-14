@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, Loader2, Check, X, RefreshCw, CheckCheck, Save, Sparkles, Layers } from 'lucide-react'
+import { ArrowLeft, Loader2, Check, X, RefreshCw, CheckCheck, Save, Sparkles, Layers, WifiOff } from 'lucide-react'
 import { api, type Annotation, type TaskDetail, type JudgeType } from '@/lib/pm'
 import { usePm } from '@/lib/pm-store'
 import { useToast } from '@/hooks/use-toast'
@@ -16,37 +16,18 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Separator } from '@/components/ui/separator'
 import { AnnotationOverlay } from './annotation-overlay'
 import { PrintPanel } from './print-panel'
-
-/** 半对图标：完整的勾 + 勾上方一个叉（与批注层/PDF 完全一致） */
-function HalfCheckXIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
-      <path
-        d="M4 12.5 L9.5 18 L20 6"
-        stroke="currentColor"
-        strokeWidth="3"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M9.2 1.2 L18.6 10.6 M18.6 1.2 L9.2 10.6"
-        stroke="currentColor"
-        strokeWidth="2.6"
-        strokeLinecap="round"
-      />
-    </svg>
-  )
-}
+import { JudgeMarkIcon } from './judge-icons'
 
 const JUDGE_INFO: Record<JudgeType, { label: string; color: string; bg: string; icon: any }> = {
   correct: { label: '正确 √', color: 'text-emerald-700', bg: 'bg-emerald-100 border-emerald-300', icon: Check },
   wrong: { label: '错误 ×', color: 'text-red-700', bg: 'bg-red-100 border-red-300', icon: X },
-  partial: { label: '半对 √×', color: 'text-amber-700', bg: 'bg-amber-100 border-amber-300', icon: HalfCheckXIcon },
+  partial: { label: '半对 ⍻', color: 'text-amber-700', bg: 'bg-amber-100 border-amber-300', icon: null },
 }
 export function Review({ taskId }: { taskId: string }) {
   const { setView, setTaskDetail, taskDetail, selectedAnnotationId, setSelected } = usePm()
   const [task, setTask] = useState<TaskDetail | null>(taskDetail && taskDetail.id === taskId ? taskDetail : null)
   const [loading, setLoading] = useState(!task)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [batching, setBatching] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
@@ -55,12 +36,13 @@ export function Review({ taskId }: { taskId: string }) {
 
   const fetchTask = async () => {
     setLoading(true)
+    setLoadError(null)
     try {
-      const r = await api.getTask(taskId)
+      const r = await api.getTask(taskId) // 内置 20s 超时，避免弱网下无限转圈
       setTask(r.task)
       setTaskDetail(r.task)
     } catch (e: any) {
-      toast({ title: '加载失败', description: e.message, variant: 'destructive' })
+      setLoadError(e?.message || '加载失败')
     } finally {
       setLoading(false)
     }
@@ -142,6 +124,25 @@ export function Review({ taskId }: { taskId: string }) {
       <div className="flex flex-col items-center justify-center gap-3 py-24">
         <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
         <p className="text-sm text-muted-foreground">加载任务详情…</p>
+      </div>
+    )
+  }
+
+  // 加载失败：显示错误 + 重试，绝不无限转圈
+  if (!task && loadError) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 py-20">
+        <WifiOff className="h-8 w-8 text-red-500" />
+        <p className="text-sm font-medium">任务详情加载失败</p>
+        <p className="max-w-md text-center text-xs text-muted-foreground">{loadError}</p>
+        <div className="flex gap-2">
+          <Button size="sm" onClick={fetchTask} className="bg-emerald-600 hover:bg-emerald-700">
+            <RefreshCw className="mr-1 h-3.5 w-3.5" /> 重试
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setView('dashboard')}>
+            <ArrowLeft className="mr-1 h-3.5 w-3.5" /> 返回列表
+          </Button>
+        </div>
       </div>
     )
   }
@@ -321,7 +322,6 @@ export function Review({ taskId }: { taskId: string }) {
                       <div className="grid grid-cols-3 gap-1.5">
                         {(Object.keys(JUDGE_INFO) as JudgeType[]).map((j) => {
                           const info = JUDGE_INFO[j]
-                          const Icon = info.icon
                           return (
                             <button
                               key={j}
@@ -330,7 +330,7 @@ export function Review({ taskId }: { taskId: string }) {
                                 selected.judgeType === j ? info.bg : 'border-muted hover:bg-muted'
                               }`}
                             >
-                              <Icon className="h-3.5 w-3.5" />
+                              <JudgeMarkIcon type={j} size={15} className={info.color} />
                               {info.label}
                             </button>
                           )

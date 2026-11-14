@@ -19,6 +19,8 @@ interface PmState {
   layers: Layers
   taskDetail: TaskDetail | null
   selectedAnnotationId: string | null
+  /** 待剪辑照片队列（拍照/选图后先进入四角剪辑器） */
+  pendingScanFiles: File[]
   setView: (v: View) => void
   openTask: (id: string) => void
   setAuthed: (b: boolean) => void
@@ -28,9 +30,11 @@ interface PmState {
   setTaskDetail: (t: TaskDetail | null) => void
   toggleLayer: (k: keyof Layers) => void
   setSelected: (id: string | null) => void
+  pushPendingScanFiles: (files: File[]) => void
+  consumePendingScanFiles: () => File[]
 }
 
-export const usePm = create<PmState>((set) => ({
+export const usePm = create<PmState>((set, get) => ({
   view: 'dashboard',
   currentTaskId: null,
   authed: false,
@@ -39,6 +43,7 @@ export const usePm = create<PmState>((set) => ({
   layers: { boxes: true, marks: true, scores: true, answers: false },
   taskDetail: null,
   selectedAnnotationId: null,
+  pendingScanFiles: [],
   setView: (v) => set({ view: v }),
   openTask: (id) => set({ view: 'review', currentTaskId: id, selectedAnnotationId: null }),
   setAuthed: (b) => set({ authed: b }),
@@ -51,8 +56,16 @@ export const usePm = create<PmState>((set) => ({
       view: 'dashboard',
       currentTaskId: null,
       taskDetail: null,
+      pendingScanFiles: [],
     }),
   setTaskDetail: (t) => set({ taskDetail: t }),
   toggleLayer: (k) => set((s) => ({ layers: { ...s.layers, [k]: !s.layers[k] } })),
   setSelected: (id) => set({ selectedAnnotationId: id }),
+  pushPendingScanFiles: (files) =>
+    set((s) => ({ pendingScanFiles: [...s.pendingScanFiles, ...files] })),
+  consumePendingScanFiles: () => {
+    const files = get().pendingScanFiles
+    set({ pendingScanFiles: [] })
+    return files
+  },
 }))

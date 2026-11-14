@@ -19,6 +19,7 @@ export async function PATCH(req: NextRequest) {
     answerText,
     layout,
     reviewStatus,
+    answerRoi,
   } = body
 
   const ann = await db.annotation.findUnique({
@@ -39,6 +40,20 @@ export async function PATCH(req: NextRequest) {
   if (layout !== undefined) data.layout = layout
   if (reviewStatus !== undefined) data.reviewStatus = reviewStatus
   else data.reviewStatus = 'reviewed'
+  // 答案回填空白区（相对坐标对象 {x,y,w,h}，传 null 清除）
+  if (answerRoi !== undefined) {
+    if (answerRoi && Number(answerRoi.w) >= 0.1 && Number(answerRoi.h) >= 0.018) {
+      data.answerRoiX = Math.min(1, Math.max(0, Number(answerRoi.x) || 0))
+      data.answerRoiY = Math.min(1, Math.max(0, Number(answerRoi.y) || 0))
+      data.answerRoiW = Math.min(1, Math.max(0, Number(answerRoi.w) || 0))
+      data.answerRoiH = Math.min(1, Math.max(0, Number(answerRoi.h) || 0))
+    } else {
+      data.answerRoiX = null
+      data.answerRoiY = null
+      data.answerRoiW = null
+      data.answerRoiH = null
+    }
+  }
 
   await db.annotation.update({ where: { id }, data })
 

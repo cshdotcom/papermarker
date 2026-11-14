@@ -104,6 +104,11 @@ model Annotation {
   reviewAt        DateTime?
   originJudgeType JudgeType?
   originGetScore  Float?
+  // 答案回填：题目作答空白区相对坐标（VLM 识别，可空）
+  answerRoiX      Float?
+  answerRoiY      Float?
+  answerRoiW      Float?
+  answerRoiH      Float?
   createdAt       DateTime      @default(now())
 }
 

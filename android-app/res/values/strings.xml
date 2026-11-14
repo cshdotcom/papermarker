@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PaperMarker</string>
+    <string name="login_title">PaperMarker 批改扫描</string>
+    <string name="login_sub">连接服务端 · 手机扫描 · AI 批改</string>
+    <string name="hint_server">服务器地址（如 http://192.168.1.100:3000）</string>
+    <string name="hint_user">用户名</string>
+    <string name="hint_pass">密码</string>
+    <string name="btn_login">登录连接</string>
+    <string name="btn_mode_key">改用 API Key 连接</string>
+    <string name="hint_apikey">粘贴 API Key（网站「设置 → 应用连接」中创建）</string>
+    <string name="demo_tip">账号 teacher / papermarker，或用网站创建的 API Key 连接</string>
+    <string name="main_title">任务列表</string>
+    <string name="btn_scan">扫描上传</string>
+    <string name="btn_refresh">刷新</string>
+    <string name="settings">设置</string>
+    <string name="logout">退出登录</string>
+</resources>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="primary">#D93A3A</color>
+    <color name="primaryDark">#B72B2B</color>
+    <color name="accent">#0E9F6E</color>
+    <color name="correct">#16A34A</color>
+    <color name="wrong">#DC2626</color>
+    <color name="partial">#D97706</color>
+    <color name="boxBlue">#2563EB</color>
+    <color name="textMain">#1F2937</color>
+    <color name="textSub">#6B7280</color>
+    <color name="bgPage">#F6F7F9</color>
+    <color name="white">#FFFFFF</color>
+</resources>

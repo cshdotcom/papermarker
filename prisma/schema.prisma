@@ -1,0 +1,169 @@
+// PaperMarker - 试卷批改系统
+// learn more: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  apiKey       String?  @unique
+  createdAt    DateTime @default(now())
+  lastLoginAt  DateTime?
+  configJson   String   @default("{}")
+
+  tasks        Task[]
+  annotations  Annotation[]
+  apiTokens    ApiToken[]
+}
+
+model Task {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  paperName     String
+  studentName   String?
+  createdAt     DateTime @default(now())
+  reviewStatus  String   @default("pending_ai") // pending_ai | pending_review | reviewed_ok
+  printStatus   String   @default("idle")       // idle | printing | print_finish | print_failed
+  printMode     String?
+  parseMode     String?  // auto_ask | always | never
+  answerMode    String?  // auto_ask | inplace | separate
+  totalGet      Float    @default(0)
+  totalFull     Float    @default(0)
+  hasAnswerPage Int      @default(0)
+  hasParsePage  Int      @default(0)
+  reviewUid     String?
+  reviewAt      DateTime?
+  imgWidth      Int      @default(0)
+  imgHeight     Int      @default(0)
+
+  pages         TaskPage[]
+  annotations   Annotation[]
+  files         File[]
+  printSubtasks PrintSubtask[]
+}
+
+model TaskPage {
+  id      String  @id @default(cuid())
+  taskId  String
+  task    Task    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  pageNo  Int
+  pageGet Float   @default(0)
+  pageFull Float  @default(0)
+
+  @@unique([taskId, pageNo])
+}
+
+enum JudgeType {
+  correct
+  wrong
+  partial
+}
+
+enum Layout {
+  inplace
+  separate
+}
+
+enum ReviewStatus {
+  ai_only
+  reviewed
+  skipped
+}
+
+model Annotation {
+  id              String        @id @default(cuid())
+  taskId          String
+  task            Task          @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  pageNo          Int           @default(1)
+  // ROI 坐标使用相对比例 (0~1)，便于任意分辨率图片叠加
+  roiX             Float
+  roiY             Float
+  roiW             Float
+  roiH             Float
+  judgeType       JudgeType     @default(wrong)
+  fullScore       Float         @default(0)
+  getScore        Float         @default(0)
+  confidence      Float?
+  briefReason     String?
+  fullSolution    String?
+  answerText      String?
+  questionText    String?
+  layout          Layout        @default(inplace)
+  reviewStatus    ReviewStatus @default(ai_only)
+  reviewUid       String?
+  user            User?         @relation(fields: [reviewUid], references: [id])
+  reviewAt        DateTime?
+  originJudgeType JudgeType?
+  originGetScore  Float?
+  createdAt       DateTime      @default(now())
+}
+
+model File {
+  id        String   @id @default(cuid())
+  taskId    String?
+  task      Task?    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  fileType  String   // origin | mark_pdf | answer_pdf | parse_pdf | scan_tmp | copy_pdf
+  filePath  String
+  pageNo    Int      @default(1)
+  width     Int?
+  height    Int?
+  userId    String?  // 扫描托盘归属（未关联任务时）
+  createdAt DateTime @default(now())
+}
+
+model PrintSubtask {
+  id         String    @id @default(cuid())
+  taskId     String
+  task       Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  subType    String    // mark | parse | answer | copy
+  status     String    @default("wait") // wait | running | ok | fail
+  msg        String?
+  createdAt  DateTime  @default(now())
+  finishedAt DateTime?
+}
+
+model PrinterConfig {
+  id        Int      @id @default(1)
+  ippUrl    String   @default("http://192.168.1.100:631/ipp/print")
+  name      String   @default("Canon G3810")
+  duplex    Boolean  @default(false)
+  copies    Int      @default(1)
+  mode      String   @default("ipp")   // ipp（通用 IPP 协议） | brother（Brother 9100 直连 JPEG）
+  host      String   @default("")      // Brother 直连模式下的打印机 IP
+  updatedAt DateTime @updatedAt
+}
+
+model ScannerConfig {
+  id        Int      @id @default(1)
+  esclUrl   String   @default("http://192.168.1.100:8095/eSCL")
+  name      String   @default("网络扫描仪")
+  source    String   @default("Platen") // Platen | Feeder
+  colorMode String   @default("RGB24")  // RGB24 | Grayscale8 | BlackAndWhite1
+  dpi       Int      @default(200)
+  protocol  String   @default("escl")   // escl（通用 eSCL/AirScan） | brother（Brother 私有协议 54921）
+  host      String   @default("")       // Brother 模式下的打印机 IP
+  updatedAt DateTime @updatedAt
+}
+
+// 应用连接凭据（Android APP / 第三方应用 通过 X-API-Key 访问 API）
+model ApiToken {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String    @default("应用")
+  key        String    @unique
+  enabled    Boolean   @default(true)
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+}

@@ -176,7 +176,7 @@ export function AnnotationOverlay({ page, annotations, pageScore }: Props) {
   )
 }
 
-/** 题级判分标记层（v3：题号旁，小号矢量⍻，不放右边） */
+/** 题级判分标记层（v4：每题一个清晰符号，紧贴题框左上角外侧，不放右边） */
 function QuestionMarksLayer({ annotations }: { annotations: Annotation[] }) {
   const { layers, selectedAnnotationId, setSelected } = usePm()
   if (!layers.marks) return null
@@ -184,6 +184,7 @@ function QuestionMarksLayer({ annotations }: { annotations: Annotation[] }) {
     <>
       {annotations.map((a) => {
         const mp = questionMarkPos({ x: a.roi.x, y: a.roi.y, w: a.roi.w, h: a.roi.h })
+        const selected = a.id === selectedAnnotationId
         return (
           <div
             key={`qm-${a.id}`}
@@ -191,13 +192,15 @@ function QuestionMarksLayer({ annotations }: { annotations: Annotation[] }) {
               e.stopPropagation()
               setSelected(a.id)
             }}
-            className="absolute flex -translate-x-1/2 -translate-y-1/2 cursor-pointer items-center rounded-sm bg-white/75 p-[1px]"
+            className={`absolute flex -translate-x-1/2 -translate-y-1/2 cursor-pointer items-center rounded-full p-[2px] shadow-sm ring-1 ${
+              selected ? 'ring-emerald-500 bg-white' : 'ring-black/10 bg-white/95'
+            }`}
             style={{
               left: `${mp.cx * 100}%`,
               top: `${mp.cy * 100}%`,
             }}
           >
-            <JudgeMarkIcon type={a.judgeType} size={12} strokeWidth={3} />
+            <JudgeMarkIcon type={a.judgeType} size={16} strokeWidth={3} />
           </div>
         )
       })}
@@ -205,7 +208,7 @@ function QuestionMarksLayer({ annotations }: { annotations: Annotation[] }) {
   )
 }
 
-/** 每空小标记层 */
+/** 每空小标记层（v4：不再重复打勾叉，只在空内显示小得分 + 正确答案） */
 function BlankMarksLayer({
   blanks,
   showScores,
@@ -236,27 +239,24 @@ function BlankMarksLayer({
     <>
       {marks.map((m, i) => (
         <div key={i}>
-          {/* 小标记 + 小得分（空右侧，不占空间） */}
-          <div
-            onClick={(e) => {
-              e.stopPropagation()
-              onSelect()
-            }}
-            className="absolute flex -translate-y-1/2 -translate-x-1/2 cursor-pointer items-center gap-0.5"
-            style={{
-              left: `${m.cx * 100}%`,
-              top: `${m.cy * 100}%`,
-            }}
-          >
-            <div className="rounded-sm bg-white/80 p-[1px]">
-              <JudgeMarkIcon type={m.judge} size={11} strokeWidth={3} />
-            </div>
-            {showScores && m.scoreText && (
+          {/* 每空小得分（空右侧，不重复打勾叉 —— 题级已有一个清晰符号） */}
+          {showScores && m.scoreText && (
+            <div
+              onClick={(e) => {
+                e.stopPropagation()
+                onSelect()
+              }}
+              className="absolute flex -translate-y-1/2 -translate-x-1/2 cursor-pointer items-center"
+              style={{
+                left: `${(m.box.x + m.box.w) * 100}%`,
+                top: `${(m.box.y + m.box.h / 2) * 100}%`,
+              }}
+            >
               <span className="rounded-sm bg-slate-900/75 px-0.5 text-[8px] font-semibold leading-3 text-white">
                 {m.scoreText}
               </span>
-            )}
-          </div>
+            </div>
+          )}
           {/* 空内正确答案（错/半对的空，小字居中） */}
           {showAnswers && m.answerText && (
             <div

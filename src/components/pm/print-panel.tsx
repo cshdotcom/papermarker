@@ -1,7 +1,24 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Printer, FileText, Loader2, ExternalLink, FileCheck, FileQuestion, BookOpen, Layers, RefreshCw, Globe, X } from 'lucide-react'
+import {
+  Printer,
+  FileText,
+  Loader2,
+  ExternalLink,
+  FileCheck,
+  FileQuestion,
+  BookOpen,
+  Layers,
+  RefreshCw,
+  Globe,
+  X,
+  Server,
+  Wifi,
+  Monitor,
+  Smartphone,
+  ArrowRight,
+} from 'lucide-react'
 import { api, fileUrl, type TaskDetail, type MarkLayers } from '@/lib/pm'
 import { usePm } from '@/lib/pm-store'
 import { useToast } from '@/hooks/use-toast'
@@ -10,6 +27,14 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog'
 import { FlipGuide } from './flip-guide'
 
 type SubType = 'mark' | 'marks' | 'answer' | 'parse'
@@ -20,6 +45,50 @@ const SUB_LABEL: Record<SubType, string> = {
   answer: '答案 PDF',
   parse: '解析 PDF',
 }
+
+const CONTENT_OPTIONS: {
+  key: SubType
+  label: string
+  desc: string
+  icon: any
+}[] = [
+  { key: 'mark', label: '批注卷', desc: '原图 + 勾叉 + 答案 + 错因', icon: FileCheck },
+  { key: 'marks', label: '纯标记层', desc: '透明底，只保留批注标记', icon: Layers },
+  { key: 'answer', label: '答案汇总', desc: '纯文字答案页', icon: FileQuestion },
+  { key: 'parse', label: '解析汇总', desc: '纯文字解析页', icon: BookOpen },
+]
+
+type PrintMethod = 'browser' | 'ipp' | 'brother'
+
+const METHOD_OPTIONS: {
+  key: PrintMethod
+  label: string
+  desc: string
+  icon: any
+  hint: string
+}[] = [
+  {
+    key: 'browser',
+    label: '浏览器打印',
+    desc: '渲染图片 → 系统打印对话框',
+    icon: Globe,
+    hint: '任何网络可用，手机/电脑都支持',
+  },
+  {
+    key: 'ipp',
+    label: 'IPP 网络直连',
+    desc: 'IPP 协议 → 打印机 631 端口',
+    icon: Server,
+    hint: '佳能/惠普/兄弟通用，需同局域网',
+  },
+  {
+    key: 'brother',
+    label: 'Brother 9100 直连',
+    desc: 'PJL + JPEG → 打印机 9100 端口',
+    icon: Wifi,
+    hint: 'Brother DCP-T428W 喷墨机专用',
+  },
+]
 
 /** 可调图层（标记层/批注共用，错因+答案默认开） */
 const LAYER_ITEMS: { key: keyof MarkLayers; label: string; hint?: string }[] = [
@@ -32,11 +101,7 @@ const LAYER_ITEMS: { key: keyof MarkLayers; label: string; hint?: string }[] = [
   { key: 'banner', label: '顶部分数条' },
 ]
 
-/**
- * 浏览器直接打印预览层：
- * 按图层渲染好的批注页（图片）逐页展示 → window.print() 走系统打印。
- * 不依赖服务器与打印机同局域网 —— 任何网络环境都能打印。
- */
+/** 浏览器直接打印预览层 */
 function BrowserPrintOverlay({
   pages,
   onClose,
@@ -70,7 +135,11 @@ function BrowserPrintOverlay({
       </div>
       <div className="print-area mx-auto max-w-[820px] space-y-3 print:max-w-none print:space-y-0">
         {pages.map((p, i) => (
-          <div key={p.pageNo} className="bg-white print:block" style={{ breakAfter: i < pages.length - 1 ? 'page' : 'auto' }}>
+          <div
+            key={p.pageNo}
+            className="bg-white print:block"
+            style={{ breakAfter: i < pages.length - 1 ? 'page' : 'auto' }}
+          >
             <img
               src={p.dataUrl}
               alt={`第${p.pageNo}页`}
@@ -84,15 +153,61 @@ function BrowserPrintOverlay({
   )
 }
 
+/** 打印流程示意图 */
+function PrintFlowDiagram({ method }: { method: PrintMethod }) {
+  const steps =
+    method === 'browser'
+      ? [
+          { icon: Monitor, label: '本设备', sub: '浏览器' },
+          { icon: Globe, label: '渲染图片', sub: '系统打印框' },
+          { icon: Printer, label: '任意打印机', sub: '本地/网络' },
+        ]
+      : method === 'ipp'
+      ? [
+          { icon: Smartphone, label: '本设备', sub: '网页端' },
+          { icon: Server, label: 'IPP 协议', sub: '631 端口' },
+          { icon: Printer, label: '局域网打印机', sub: '佳能/惠普等' },
+        ]
+      : [
+          { icon: Smartphone, label: '本设备', sub: '网页端' },
+          { icon: Wifi, label: 'PJL+JPEG', sub: '9100 端口' },
+          { icon: Printer, label: 'Brother 打印机', sub: 'DCP-T428W' },
+        ]
+  return (
+    <div className="flex items-center justify-between gap-1 rounded-lg border bg-muted/30 p-3">
+      {steps.map((s, i) => {
+        const Icon = s.icon
+        return (
+          <div key={i} className="flex flex-1 items-center">
+            <div className="flex flex-col items-center gap-0.5 text-center">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
+                <Icon className="h-4 w-4" />
+              </div>
+              <div className="text-[11px] font-semibold leading-tight">{s.label}</div>
+              <div className="text-[9px] text-muted-foreground leading-tight">{s.sub}</div>
+            </div>
+            {i < steps.length - 1 && (
+              <ArrowRight className="mx-1 h-4 w-4 shrink-0 text-muted-foreground/50" />
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export function PrintPanel({ task }: { task: TaskDetail }) {
   const [duplex, setDuplex] = useState(false)
   const [copies, setCopies] = useState(1)
   const [busy, setBusy] = useState<SubType | null>(null)
   const [regenerating, setRegenerating] = useState(false)
-  // 浏览器直接打印（mark=带原图；marks=纯标记层）
   const [webPrint, setWebPrint] = useState<'mark' | 'marks' | null>(null)
   const [webPages, setWebPages] = useState<{ pageNo: number; dataUrl: string }[]>([])
-  const { layers, setLayers, toggleLayer } = usePm()
+  // 打印对话框状态
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [chosenContent, setChosenContent] = useState<SubType>('mark')
+  const [chosenMethod, setChosenMethod] = useState<PrintMethod>('browser')
+  const { layers, toggleLayer } = usePm()
   const { toast } = useToast()
 
   const fileIds: Record<SubType, string | undefined> = {
@@ -104,14 +219,12 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
 
   const openPdf = (id: string) => window.open(fileUrl(id), '_blank')
 
-  // 打印时锁定 body 滚动
   useEffect(() => {
     if (webPrint) document.body.classList.add('printing-lock')
     else document.body.classList.remove('printing-lock')
     return () => document.body.classList.remove('printing-lock')
   }, [webPrint])
 
-  /** 按当前图层重新生成四类 PDF */
   const regenerate = async () => {
     setRegenerating(true)
     try {
@@ -124,7 +237,6 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
     }
   }
 
-  /** 浏览器直接打印：渲染批注页 → 全屏预览 → 系统打印对话框 */
   const doBrowserPrint = async (sub: 'mark' | 'marks') => {
     setBusy(sub)
     try {
@@ -142,23 +254,24 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
     }
   }
 
-  const doPrint = async (sub: SubType) => {
+  const doDirectPrint = async (sub: SubType) => {
     setBusy(sub)
     try {
       const fid = fileIds[sub]
       if (!fid) {
-        toast({ title: 'PDF 尚未生成', variant: 'destructive' })
+        toast({ title: 'PDF 尚未生成，请先点击「重新生成 PDF」', variant: 'destructive' })
         return
       }
-      const r = await api.print({
-        taskId: task.id,
-        subType: sub,
-        duplex,
-        copies,
-        layers,
-      }).catch((e) => e)
+      const r = await api
+        .print({
+          taskId: task.id,
+          subType: sub,
+          duplex,
+          copies,
+          layers,
+        })
+        .catch((e) => e)
 
-      // 服务端 IPP/直连失败 → 返回 fallbackPdfFileId，走浏览器打印
       if (r?.code === 500 && r.fallbackPdfFileId) {
         toast({
           title: '直连打印失败，已切换浏览器打印',
@@ -183,6 +296,17 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
     }
   }
 
+  /** 确认打印：按所选方式分发 */
+  const confirmPrint = async () => {
+    setDialogOpen(false)
+    if (chosenMethod === 'browser') {
+      // 浏览器打印只支持 mark / marks
+      await doBrowserPrint(chosenContent === 'answer' || chosenContent === 'parse' ? 'mark' : chosenContent)
+    } else {
+      await doDirectPrint(chosenContent)
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -192,7 +316,7 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* 标记内容图层（错因/答案默认开，可调整） */}
+        {/* 标记内容图层 */}
         <div className="rounded-lg border p-3">
           <div className="mb-2 flex items-center justify-between">
             <div className="flex items-center gap-1.5 text-xs font-medium">
@@ -240,45 +364,18 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
           </p>
         </div>
 
-        {/* 浏览器直接打印（推荐，不依赖局域网） */}
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-3">
-          <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-emerald-800">
-            <Globe className="h-3.5 w-3.5" />
-            浏览器直接打印（推荐 · 任何网络可用）
-          </div>
-          <p className="mb-2 text-[11px] text-muted-foreground">
-            按当前图层把批注页渲染成图片，用系统打印对话框打印 —— 手机 / 电脑 / 任何打印机都支持
-          </p>
-          <div className="grid grid-cols-2 gap-2">
-            <Button
-              onClick={() => doBrowserPrint('mark')}
-              disabled={busy !== null}
-              className="bg-emerald-600 hover:bg-emerald-700"
-              size="sm"
-            >
-              {busy === 'mark' ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <FileCheck className="mr-1 h-4 w-4" />}
-              带原卷批注
-            </Button>
-            <Button
-              onClick={() => doBrowserPrint('marks')}
-              disabled={busy !== null}
-              variant="secondary"
-              className="bg-amber-600 text-white hover:bg-amber-700"
-              size="sm"
-            >
-              {busy === 'marks' ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Layers className="mr-1 h-4 w-4" />}
-              纯标记层
-            </Button>
-          </div>
-        </div>
-
+        {/* 双面 / 份数 */}
         <div className="grid grid-cols-2 gap-3">
           <div className="flex items-center justify-between rounded-lg border p-2.5">
-            <Label htmlFor="duplex" className="text-xs">双面打印</Label>
+            <Label htmlFor="duplex" className="text-xs">
+              双面打印
+            </Label>
             <Switch id="duplex" checked={duplex} onCheckedChange={setDuplex} />
           </div>
           <div className="flex items-center gap-2 rounded-lg border p-2.5">
-            <Label htmlFor="copies" className="text-xs whitespace-nowrap">份数</Label>
+            <Label htmlFor="copies" className="whitespace-nowrap text-xs">
+              份数
+            </Label>
             <Input
               id="copies"
               type="number"
@@ -297,37 +394,18 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
           </div>
         )}
 
-        {/* 网络直连打印（同局域网） */}
-        <div className="space-y-2">
-          <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <Printer className="h-3.5 w-3.5" />
-            网络直连打印（需与打印机同一局域网）
-          </div>
-          <Button
-            onClick={() => doPrint('mark')}
-            disabled={busy !== null}
-            variant="outline"
-            className="w-full"
-          >
-            {busy === 'mark' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileCheck className="mr-2 h-4 w-4" />}
-            直连打印批注 PDF
-          </Button>
-          <div className="grid grid-cols-3 gap-2">
-            <Button onClick={() => doPrint('marks')} disabled={busy !== null} variant="outline" size="sm">
-              {busy === 'marks' ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Layers className="mr-1 h-3.5 w-3.5" />}
-              标记层
-            </Button>
-            <Button onClick={() => doPrint('answer')} disabled={busy !== null} variant="outline" size="sm">
-              {busy === 'answer' ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <FileQuestion className="mr-1 h-3.5 w-3.5" />}
-              答案
-            </Button>
-            <Button onClick={() => doPrint('parse')} disabled={busy !== null} variant="outline" size="sm">
-              {busy === 'parse' ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <BookOpen className="mr-1 h-3.5 w-3.5" />}
-              解析
-            </Button>
-          </div>
-        </div>
+        {/* 主打印按钮：打开选择对话框 */}
+        <Button
+          onClick={() => setDialogOpen(true)}
+          disabled={busy !== null}
+          className="w-full bg-emerald-600 text-base hover:bg-emerald-700"
+          size="lg"
+        >
+          {busy ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Printer className="mr-2 h-5 w-5" />}
+          开始打印
+        </Button>
 
+        {/* PDF 浏览 / 下载 */}
         <div className="border-t pt-3">
           <div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
             <FileText className="h-3.5 w-3.5" />
@@ -350,6 +428,143 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
           </div>
         </div>
       </CardContent>
+
+      {/* 打印方式选择对话框 */}
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Printer className="h-4 w-4 text-emerald-600" />
+              选择打印方式
+            </DialogTitle>
+            <DialogDescription>
+              先选择打印内容，再选择打印方式。浏览器打印任何网络可用；直连打印需与打印机同一局域网。
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {/* 步骤 1：打印内容 */}
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold text-muted-foreground">
+                ① 打印内容
+              </Label>
+              <div className="grid grid-cols-2 gap-2">
+                {CONTENT_OPTIONS.map((c) => {
+                  const Icon = c.icon
+                  const active = chosenContent === c.key
+                  return (
+                    <button
+                      key={c.key}
+                      onClick={() => setChosenContent(c.key)}
+                      className={`flex items-start gap-2 rounded-lg border p-2.5 text-left transition ${
+                        active
+                          ? 'border-emerald-500 bg-emerald-50'
+                          : 'border-muted hover:bg-muted/50'
+                      }`}
+                    >
+                      <Icon
+                        className={`mt-0.5 h-4 w-4 shrink-0 ${
+                          active ? 'text-emerald-600' : 'text-muted-foreground'
+                        }`}
+                      />
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold">{c.label}</div>
+                        <div className="text-[10px] leading-tight text-muted-foreground">
+                          {c.desc}
+                        </div>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* 步骤 2：打印方式 */}
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold text-muted-foreground">
+                ② 打印方式
+              </Label>
+              <div className="space-y-2">
+                {METHOD_OPTIONS.map((m) => {
+                  const Icon = m.icon
+                  const active = chosenMethod === m.key
+                  return (
+                    <button
+                      key={m.key}
+                      onClick={() => setChosenMethod(m.key)}
+                      className={`flex w-full items-start gap-2.5 rounded-lg border p-2.5 text-left transition ${
+                        active
+                          ? 'border-emerald-500 bg-emerald-50'
+                          : 'border-muted hover:bg-muted/50'
+                      }`}
+                    >
+                      <div
+                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
+                          active ? 'bg-emerald-600 text-white' : 'bg-muted text-muted-foreground'
+                        }`}
+                      >
+                        <Icon className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold">{m.label}</span>
+                          {active && (
+                            <span className="rounded-full bg-emerald-600 px-1.5 py-0.5 text-[9px] font-medium text-white">
+                              已选
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-muted-foreground">{m.desc}</div>
+                        <div className="text-[10px] text-muted-foreground/80">{m.hint}</div>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* 步骤 3：流程示意图 */}
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold text-muted-foreground">
+                ③ 打印流程
+              </Label>
+              <PrintFlowDiagram method={chosenMethod} />
+            </div>
+
+            {/* 当前配置摘要 */}
+            <div className="rounded-lg bg-muted/40 p-2.5 text-[11px]">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span>
+                  内容：<b className="text-foreground">{SUB_LABEL[chosenContent]}</b>
+                </span>
+                <span>
+                  方式：<b className="text-foreground">{METHOD_OPTIONS.find((m) => m.key === chosenMethod)?.label}</b>
+                </span>
+                <span>
+                  份数：<b className="text-foreground">{copies}</b>
+                </span>
+                <span>
+                  双面：<b className="text-foreground">{duplex ? '是' : '否'}</b>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialogOpen(false)}>
+              取消
+            </Button>
+            <Button
+              onClick={confirmPrint}
+              disabled={busy !== null}
+              className="bg-emerald-600 hover:bg-emerald-700"
+            >
+              {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Printer className="mr-1 h-4 w-4" />}
+              确认打印
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* 浏览器直接打印预览 */}
       {webPrint && webPages.length > 0 && (

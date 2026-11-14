@@ -141,7 +141,7 @@ export function ScanView() {
     } catch {}
   }
 
-  // 提交 AI 批改（多页任务）
+  // 提交 AI 批改（异步批改 v2：上传成功即返回，后台批改）
   const submit = async () => {
     if (pages.length === 0) {
       toast({ title: '托盘没有页面，请先扫描或拍照', variant: 'destructive' })
@@ -156,7 +156,7 @@ export function ScanView() {
       )
       toast({
         title: `已创建 ${r.summary.pageCount} 页批改任务`,
-        description: `共 ${r.summary.questionCount} 题，AI 判分 ${r.summary.totalGet}/${r.summary.totalFull}`,
+        description: 'AI 正在后台批改，进入任务可查看进度',
       })
       setPaperName('')
       setStudentName('')

@@ -48,18 +48,21 @@ export function Review({ taskId }: { taskId: string }) {
   const [currentPage, setCurrentPage] = useState(1)
   const { toast } = useToast()
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const fetchTask = async () => {
-    setLoading(true)
-    setLoadError(null)
+  const fetchTask = async (silent = false) => {
+    if (!silent) {
+      setLoading(true)
+      setLoadError(null)
+    }
     try {
       const r = await api.getTask(taskId)
       setTask(r.task)
       setTaskDetail(r.task)
     } catch (e: any) {
-      setLoadError(e?.message || '加载失败')
+      if (!silent) setLoadError(e?.message || '加载失败')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
@@ -70,6 +73,23 @@ export function Review({ taskId }: { taskId: string }) {
   useEffect(() => {
     setCurrentPage(1)
   }, [taskId])
+
+  // 异步批改轮询：任务处于 pending_ai 时每 3 秒静默刷新，直到变为 pending_review
+  useEffect(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+    if (task?.reviewStatus === 'pending_ai') {
+      pollRef.current = setInterval(() => fetchTask(true), 3000)
+    }
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+    }
+  }, [task?.reviewStatus, taskId])
 
   const patchLocal = (id: string, patch: Partial<Annotation>) => {
     setTask((prev) => {
@@ -131,6 +151,33 @@ export function Review({ taskId }: { taskId: string }) {
       <div className="flex flex-col items-center justify-center gap-3 py-24">
         <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
         <p className="text-sm text-muted-foreground">加载任务详情…</p>
+      </div>
+    )
+  }
+
+  // 异步批改进行中：显示进度提示（轮询自动刷新）
+  if (task && task.reviewStatus === 'pending_ai') {
+    return (
+      <div className="flex flex-col items-center justify-center gap-4 py-24">
+        <div className="relative">
+          <Loader2 className="h-12 w-12 animate-spin text-emerald-600" />
+          <Sparkles className="absolute inset-0 m-auto h-5 w-5 text-emerald-500" />
+        </div>
+        <div className="text-center">
+          <p className="text-base font-semibold">AI 正在批改中</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {task.paperName} · {task.imgWidth ? '图像已接收' : '处理中'}
+          </p>
+          <p className="mt-2 text-xs text-muted-foreground">页面已上传成功，批改在后台进行，预计 20-30 秒完成…</p>
+        </div>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={() => fetchTask()}>
+            <RefreshCw className="mr-1 h-3.5 w-3.5" /> 立即刷新
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setView('dashboard')}>
+            <ArrowLeft className="mr-1 h-3.5 w-3.5" /> 返回列表
+          </Button>
+        </div>
       </div>
     )
   }

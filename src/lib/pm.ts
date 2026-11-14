@@ -357,10 +357,13 @@ export const api = {
   deleteTrayPage: (id?: string) =>
     jfetch(`/api/scan/pages${id ? `?id=${id}` : ''}`, { method: 'DELETE' }),
   createTaskFromPages: (fileIds: string[], paperName: string, studentName: string) =>
-    jfetch('/api/tasks/from-pages', {
-      method: 'POST',
-      body: JSON.stringify({ fileIds, paperName, studentName }),
-    }),
+    jfetch<{ code: number; taskId: string; status: string; msg: string; summary: { pageCount: number } }>(
+      '/api/tasks/from-pages',
+      {
+        method: 'POST',
+        body: JSON.stringify({ fileIds, paperName, studentName }),
+      }
+    ),
   copyPrint: (body: {
     fileIds: string[]
     duplex?: boolean

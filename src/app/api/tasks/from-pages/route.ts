@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { after } from 'next/server'
 import { authGuard } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { absPath } from '@/lib/storage'
@@ -9,10 +10,13 @@ export const runtime = 'nodejs'
 export const maxDuration = 120
 
 /**
- * 从扫描托盘的页面创建多页批改任务：
+ * 从扫描托盘的页面创建多页批改任务（异步批改 v2）：
  * 1. 校验 fileIds 归属当前用户（scan_tmp）
  * 2. 依次绑定到新任务（pageNo=1..N, fileType=origin）
- * 3. VLM 多页批改 → 汇总 → 生成三类 PDF
+ * 3. 立即返回 taskId（状态 pending_ai），后台异步执行 VLM 批改 + PDF 生成
+ *
+ * 修复「上传后卡在批改中 30 秒」：上传成功即视为本步完成，
+ * 批改在后台进行，前端打开任务后看到 pending_ai 自动轮询直到 pending_review。
  */
 export async function POST(req: NextRequest) {
   const auth = await authGuard(req)
@@ -64,32 +68,46 @@ export async function POST(req: NextRequest) {
     })
   }
 
-  // VLM 多页批改
-  const paths = files.map((f) => absPath(f.filePath))
-  const result = await gradeImages(paths)
-  await persistGrade(task.id, result)
+  const pageCount = files.length
 
-  // 生成 PDF（失败不阻塞）
-  try {
-    await generateTaskPdfs(task.id)
-  } catch (e: any) {
-    console.warn('[from-pages] PDF 生成失败:', e?.message)
-  }
+  // 后台异步批改（不阻塞响应）：
+  // after() 保证请求结束后继续执行，批改完成更新状态为 pending_review
+  after(async () => {
+    const tid = task.id
+    try {
+      const paths = files.map((f) => absPath(f.filePath))
+      const result = await gradeImages(paths)
+      await persistGrade(tid, result)
 
-  await db.task.update({
-    where: { id: task.id },
-    data: { reviewStatus: 'pending_review' },
+      // 生成 PDF（失败不阻塞批改结果）
+      try {
+        await generateTaskPdfs(tid)
+      } catch (e: any) {
+        console.warn(`[from-pages] 任务 ${tid} PDF 生成失败:`, e?.message)
+      }
+
+      await db.task.update({
+        where: { id: tid },
+        data: { reviewStatus: 'pending_review' },
+      })
+      console.log(`[from-pages] 任务 ${tid} 批改完成：${result.totalGet}/${result.totalFull}，${result.questions.length} 题`)
+    } catch (e: any) {
+      console.error(`[from-pages] 任务 ${tid} 批改失败:`, e?.message || e)
+      await db.task.update({
+        where: { id: tid },
+        data: { reviewStatus: 'pending_review' },
+      }).catch(() => {})
+    }
   })
 
+  // 立即返回 —— 上传成功即视为本步完成
   return NextResponse.json({
     code: 200,
     taskId: task.id,
-    msg: `已创建 ${files.length} 页批改任务`,
+    status: 'pending_ai',
+    msg: `已创建 ${pageCount} 页批改任务，AI 正在后台批改`,
     summary: {
-      totalGet: result.totalGet,
-      totalFull: result.totalFull,
-      questionCount: result.questions.length,
-      pageCount: files.length,
+      pageCount,
     },
   })
 }

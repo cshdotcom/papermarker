@@ -89,7 +89,7 @@ jobs:
           echo "[4/7] javac 编译 Java"
           find src "$OUT/gen" -name "*.java" > "$OUT/sources.txt"
           javac -source 11 -target 11 -nowarn -encoding UTF-8 \
-            -bootclasspath "$AJAR" -classpath "$AJAR" \
+            -classpath "$AJAR" \
             -d "$OUT/classes" @"$OUT/sources.txt"
 
           echo "[5/7] d8 打包 dex"

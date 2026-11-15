@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { api, fileUrl, type ScannerConfig, type TrayPage } from '@/lib/pm'
 import { clientEsclScan } from '@/lib/client/escl-scan'
+import { detectBridge, bridgeScan, base64ToBlob } from '@/lib/client/brother-bridge'
 import { usePm } from '@/lib/pm-store'
 import { useToast } from '@/hooks/use-toast'
 import { useIsMobile } from '@/hooks/use-mobile'
@@ -115,12 +116,65 @@ export function ScanView() {
     setScanning(true)
     setScanError(null)
 
-    // Brother 54921 是裸 TCP 协议，浏览器无法发起 —— 只能用相机或 APK
+    // Brother 54921 裸 TCP：浏览器无法直连，通过本地桥接服务中转
     if (scannerCfg.protocol === 'brother') {
-      setScanning(false)
-      setScanError(
-        'Brother 54921 私有协议是裸 TCP，浏览器不支持直连。\n\n请改用「手机相机拍照」采集试卷，或使用 Android 客户端（原生 TCP 不受浏览器限制）。'
-      )
+      if (!scannerCfg.host) {
+        setScanning(false)
+        setScanError('请先在设置中配置 Brother 打印机 IP')
+        return
+      }
+      // 探测本地桥接是否运行
+      const bridge = await detectBridge()
+      if (!bridge.running) {
+        setScanning(false)
+        setScanError(
+          'Brother 54921 私有协议是裸 TCP，浏览器无法直连。\n\n' +
+            '解决方法（二选一）：\n' +
+            '① 在本电脑运行「Brother 本地桥接服务」，网页自动通过 localhost 连打印机\n' +
+            '② 改用手机相机拍照（功能等价，无需局域网）'
+        )
+        return
+      }
+      // 通过桥接服务扫描
+      try {
+        const colorMap: Record<string, string> = {
+          RGB24: 'C256',
+          Grayscale8: 'CGRAY',
+          BlackAndWhite1: 'TEXT',
+        }
+        const r = await bridgeScan(scannerCfg.host, {
+          dpi: scannerCfg.dpi,
+          colorMode: colorMap[scannerCfg.colorMode] || 'CGRAY',
+          source: scannerCfg.source,
+        })
+        if (!r.ok || r.pages.length === 0) {
+          setScanning(false)
+          setScanError(r.msg || '扫描未获取到页面')
+          return
+        }
+        // base64 → Blob → 上传托盘
+        const uploadedPages: TrayItem[] = []
+        for (const p of r.pages) {
+          try {
+            const blob = base64ToBlob(p.base64)
+            const up = await api.uploadTrayPage(blob)
+            uploadedPages.push({ id: up.page.id, url: up.page.url, w: up.page.w, h: up.page.h })
+          } catch (e: any) {
+            toast({ title: '页面上传失败', description: e.message, variant: 'destructive' })
+          }
+        }
+        if (uploadedPages.length > 0) {
+          setPages((ps) => [...ps, ...uploadedPages])
+          toast({
+            title: r.msg,
+            description: `来源：${scannerCfg.source === 'Feeder' ? '送稿器' : '平板'}（经本地桥接）`,
+          })
+        }
+      } catch (e: any) {
+        setScanError(`桥接扫描失败：${e.message}`)
+      } finally {
+        setScanning(false)
+      }
       return
     }
 
@@ -295,13 +349,18 @@ export function ScanView() {
                     <Wifi className="mt-0.5 h-4 w-4 shrink-0 text-sky-600" />
                     <div className="space-y-1">
                       <p className="font-semibold text-sky-800">浏览器直连扫描仪（不经服务器）</p>
-                      <p className="leading-relaxed text-sky-700">
-                        扫描请求由浏览器直接发往你局域网内的扫描仪，不经云端服务器。
-                        需要扫描仪支持 CORS（佳能/惠普多数支持，兄弟/爱普生多数不支持）。
-                      </p>
-                      <p className="leading-relaxed text-sky-700">
-                        Brother 54921 私有协议是裸 TCP，浏览器无法直连 —— 请用<b>手机相机</b>或<b>Android 客户端</b>。
-                      </p>
+                      {scannerCfg?.protocol === 'brother' ? (
+                        <p className="leading-relaxed text-sky-700">
+                          Brother 54921 是裸 TCP 协议，浏览器无法直连。
+                          在本电脑运行「Brother 本地桥接服务」后，网页自动通过 localhost 连打印机。
+                          未运行桥接时可用手机相机拍照替代。
+                        </p>
+                      ) : (
+                        <p className="leading-relaxed text-sky-700">
+                          扫描请求由浏览器直接发往你局域网内的扫描仪，不经云端服务器。
+                          需要扫描仪支持 CORS（佳能/惠普多数支持，兄弟/爱普生多数不支持）。
+                        </p>
+                      )}
                       <Button
                         size="sm"
                         variant="outline"

@@ -45,8 +45,8 @@ export async function PUT(req: NextRequest) {
   // 保存打印默认方案
   if (printDefaults && typeof printDefaults === 'object') {
     const cleanPrint: Record<string, any> = {}
-    // method: browser | ipp | brother
-    if (['browser', 'ipp', 'brother'].includes(printDefaults.method)) {
+    // method: ipp | brother
+    if (['ipp', 'brother'].includes(printDefaults.method)) {
       cleanPrint.method = printDefaults.method
     }
     // content: mark | marks | answer | parse

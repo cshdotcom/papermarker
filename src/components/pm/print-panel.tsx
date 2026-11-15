@@ -62,7 +62,7 @@ const CONTENT_OPTIONS: {
   { key: 'parse', label: '解析汇总', desc: '纯文字解析页', icon: BookOpen },
 ]
 
-type PrintMethod = 'browser' | 'ipp' | 'brother'
+type PrintMethod = 'ipp' | 'brother'
 
 const METHOD_OPTIONS: {
   key: PrintMethod
@@ -73,11 +73,12 @@ const METHOD_OPTIONS: {
   warning?: string
 }[] = [
   {
-    key: 'browser',
-    label: '浏览器打印',
-    desc: '渲染图片 → 系统打印对话框 → 选本机打印机',
-    icon: Globe,
-    hint: '客户端直接打印，任何网络可用，手机/电脑都支持（推荐）',
+    key: 'brother',
+    label: 'Brother 桥接打印',
+    desc: '浏览器 → localhost 桥接 → 打印机 9100',
+    icon: Wifi,
+    hint: 'Brother DCP-T428W 喷墨机专用，需本电脑运行桥接服务（推荐）',
+    warning: '需先下载并运行 papermarker-bridge.exe（扫描页有下载链接）。桥接运行后浏览器经 localhost 直连打印机 9100，不经服务器。',
   },
   {
     key: 'ipp',
@@ -86,14 +87,6 @@ const METHOD_OPTIONS: {
     icon: Server,
     hint: '佳能/惠普/兄弟通用，需服务器与打印机同局域网',
     warning: '当前服务器在云端，无法访问局域网打印机。仅当应用自托管（服务器与打印机同网）时可用。',
-  },
-  {
-    key: 'brother',
-    label: 'Brother 桥接打印',
-    desc: '浏览器 → localhost 桥接 → 打印机 9100',
-    icon: Wifi,
-    hint: 'Brother DCP-T428W 喷墨机专用，需本电脑运行桥接服务',
-    warning: '需先下载并运行 papermarker-bridge.exe（扫描页有下载链接）。桥接运行后浏览器经 localhost 直连打印机 9100，不经服务器。',
   },
 ]
 
@@ -163,13 +156,7 @@ function BrowserPrintOverlay({
 /** 打印流程示意图 */
 function PrintFlowDiagram({ method }: { method: PrintMethod }) {
   const steps =
-    method === 'browser'
-      ? [
-          { icon: Monitor, label: '本设备', sub: '浏览器' },
-          { icon: Globe, label: '渲染图片', sub: '系统打印框' },
-          { icon: Printer, label: '任意打印机', sub: '本地/网络' },
-        ]
-      : method === 'ipp'
+    method === 'ipp'
       ? [
           { icon: Smartphone, label: '本设备', sub: '网页端' },
           { icon: Server, label: 'IPP 协议', sub: '631 端口' },
@@ -397,19 +384,15 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
     }
 
     setDialogOpen(false)
-    if (chosenMethod === 'browser') {
-      // 浏览器打印只支持 mark / marks
-      await doBrowserPrint(chosenContent === 'answer' || chosenContent === 'parse' ? 'mark' : chosenContent)
-    } else if (chosenMethod === 'brother') {
+    if (chosenMethod === 'brother') {
       // Brother 直连：必须走本地桥接（不经服务器）
       const bridge = await detectBridge()
       if (bridge.running && printerCfg?.host) {
         await doBridgePrint(chosenContent)
       } else if (!bridge.running) {
-        // 桥接未运行 → 不降级服务器，明确提示
         toast({
           title: '本地桥接未运行',
-          description: 'Brother 打印需要本地桥接服务。请下载运行 papermarker-bridge.exe，或改用浏览器打印',
+          description: 'Brother 打印需要本地桥接服务。请下载运行 papermarker-bridge.exe',
           variant: 'destructive',
         })
       } else {
@@ -423,19 +406,16 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
 
   /** 一键打印：用默认方案直接打印，不弹对话框 */
   const oneClickPrint = async () => {
-    const method = printDefaults.method || 'browser'
+    const method = printDefaults.method || 'brother'
     const content = (printDefaults.content || 'mark') as SubType
-    if (method === 'browser') {
-      await doBrowserPrint(content === 'answer' || content === 'parse' ? 'mark' : content)
-    } else if (method === 'brother') {
+    if (method === 'brother') {
       const bridge = await detectBridge()
       if (bridge.running && printerCfg?.host) {
         await doBridgePrint(content)
       } else if (!bridge.running) {
-        // 桥接未运行 → 打开对话框让用户选择其他方式
         toast({
           title: '桥接未运行，请选择打印方式',
-          description: '本地桥接服务未运行，点击「选择打印方式」手动选择',
+          description: '本地桥接服务未运行，点击齿轮手动选择',
         })
         setDialogOpen(true)
       } else {

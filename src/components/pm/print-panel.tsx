@@ -18,6 +18,7 @@ import {
   Monitor,
   Smartphone,
   ArrowRight,
+  AlertCircle,
 } from 'lucide-react'
 import { api, fileUrl, type TaskDetail, type MarkLayers } from '@/lib/pm'
 import { usePm } from '@/lib/pm-store'
@@ -66,27 +67,30 @@ const METHOD_OPTIONS: {
   desc: string
   icon: any
   hint: string
+  warning?: string
 }[] = [
   {
     key: 'browser',
     label: '浏览器打印',
-    desc: '渲染图片 → 系统打印对话框',
+    desc: '渲染图片 → 系统打印对话框 → 选本机打印机',
     icon: Globe,
-    hint: '任何网络可用，手机/电脑都支持',
+    hint: '客户端直接打印，任何网络可用，手机/电脑都支持（推荐）',
   },
   {
     key: 'ipp',
     label: 'IPP 网络直连',
     desc: 'IPP 协议 → 打印机 631 端口',
     icon: Server,
-    hint: '佳能/惠普/兄弟通用，需同局域网',
+    hint: '佳能/惠普/兄弟通用，需服务器与打印机同局域网',
+    warning: '当前服务器在云端，无法访问局域网打印机。仅当应用自托管（服务器与打印机同网）时可用。',
   },
   {
     key: 'brother',
     label: 'Brother 9100 直连',
     desc: 'PJL + JPEG → 打印机 9100 端口',
     icon: Wifi,
-    hint: 'Brother DCP-T428W 喷墨机专用',
+    hint: 'Brother DCP-T428W 喷墨机专用，需服务器与打印机同局域网',
+    warning: '当前服务器在云端，无法访问局域网打印机。仅当应用自托管（服务器与打印机同网）时可用。',
   },
 ]
 
@@ -516,6 +520,12 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
                         </div>
                         <div className="text-[11px] text-muted-foreground">{m.desc}</div>
                         <div className="text-[10px] text-muted-foreground/80">{m.hint}</div>
+                        {m.warning && (
+                          <div className="mt-1 flex items-start gap-1 rounded bg-amber-50 p-1.5 text-[10px] leading-tight text-amber-700 ring-1 ring-amber-200">
+                            <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+                            <span>{m.warning}</span>
+                          </div>
+                        )}
                       </div>
                     </button>
                   )

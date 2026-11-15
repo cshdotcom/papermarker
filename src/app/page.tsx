@@ -221,8 +221,8 @@ export default function Home() {
       {/* Footer（桌面端展示，移动端由底部导航承担） */}
       <footer className="mt-auto hidden border-t bg-background md:block">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-1 px-4 py-3 text-xs text-muted-foreground sm:flex-row">
-          <span>PaperMarker · Next.js 16 + Prisma(SQLite) · eSCL / Brother 54921 扫描 + IPP / 9100 直连打印</span>
-          <span>佳能 / 兄弟 / 惠普等主流局域网打印扫描一体机通用</span>
+          <span>PaperMarker · Next.js 16 + Prisma(SQLite) · eSCL / Brother 54921 扫描 + 浏览器打印（客户端直连）</span>
+          <span>打印机探测由浏览器发起，无需服务器与打印机同网</span>
         </div>
       </footer>
 

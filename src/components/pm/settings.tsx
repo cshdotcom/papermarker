@@ -25,11 +25,11 @@ import {
   api,
   type PrinterConfig,
   type ScannerConfig,
-  type ScannerCaps,
   type ApiKeyInfo,
   type MarkLayers,
   setStoredToken,
 } from '@/lib/pm'
+import { clientProbeIpp, clientProbeBrother, clientProbeScanner } from '@/lib/client/net-probe'
 import { usePm } from '@/lib/pm-store'
 import { useToast } from '@/hooks/use-toast'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -58,14 +58,13 @@ export function Settings() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [probing, setProbing] = useState(false)
-  const [probeResult, setProbeResult] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [probeResult, setProbeResult] = useState<{ ok: boolean; msg: string; detail?: string } | null>(null)
   const [sSaving, setSSaving] = useState(false)
   const [sProbing, setSProbing] = useState(false)
   const [sProbeResult, setSProbeResult] = useState<{
     ok: boolean
     msg: string
-    caps?: ScannerCaps
-    trace?: string[]
+    detail?: string
   } | null>(null)
 
   // 标记层默认（用户级，保存后影响新任务与重新生成）
@@ -187,20 +186,20 @@ export function Settings() {
     setOrigin(window.location.origin)
   }, [])
 
+  // 打印机探测：浏览器直接发起（服务器在云端，无法访问局域网 192.168.x.x）
   const probe = async () => {
     if (!cfg) return
     setProbing(true)
     setProbeResult(null)
     try {
-      const r = await api.probePrinter({
-        ippUrl: cfg.ippUrl,
-        mode: cfg.mode,
-        host: cfg.host,
-      })
-      setProbeResult({ ok: r.ok, msg: r.msg })
+      const r =
+        cfg.mode === 'brother'
+          ? await clientProbeBrother(cfg.host)
+          : await clientProbeIpp(cfg.ippUrl)
+      setProbeResult({ ok: r.ok, msg: r.msg, detail: r.detail })
       toast({
         title: r.ok ? '打印机连通正常' : '连接失败',
-        description: r.msg,
+        description: r.detail ? `${r.msg}（${r.elapsed}ms）` : r.msg,
         variant: r.ok ? 'default' : 'destructive',
       })
     } catch (e: any) {
@@ -440,7 +439,12 @@ export function Settings() {
             <Alert variant={probeResult.ok ? 'default' : 'destructive'}>
               {probeResult.ok ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
               <AlertTitle>{probeResult.ok ? '连接成功' : '连接失败'}</AlertTitle>
-              <AlertDescription>{probeResult.msg}</AlertDescription>
+              <AlertDescription className="space-y-1">
+                  <p>{probeResult.msg}</p>
+                  {probeResult.detail && (
+                    <p className="text-[11px] text-muted-foreground">{probeResult.detail}</p>
+                  )}
+                </AlertDescription>
             </Alert>
           )}
         </CardContent>
@@ -826,15 +830,15 @@ export function Settings() {
                   setSProbing(true)
                   setSProbeResult(null)
                   try {
-                    const r = await api.probeScanner({
+                    const r = await clientProbeScanner({
                       esclUrl: scfg.esclUrl,
                       protocol: scfg.protocol,
                       host: scfg.host,
                     })
-                    setSProbeResult({ ok: r.ok, msg: r.msg, caps: r.caps, trace: (r as any).trace })
+                    setSProbeResult({ ok: r.ok, msg: r.msg, detail: r.detail })
                     toast({
                       title: r.ok ? '扫描仪连通正常' : '连接失败',
-                      description: r.msg,
+                      description: r.detail ? `${r.msg}（${r.elapsed}ms）` : r.msg,
                       variant: r.ok ? 'default' : 'destructive',
                     })
                   } catch (e: any) {
@@ -876,13 +880,8 @@ export function Settings() {
                 <AlertTitle>{sProbeResult.ok ? '连接成功' : '连接失败'}</AlertTitle>
                 <AlertDescription className="space-y-1">
                   <p>{sProbeResult.msg}</p>
-                  {sProbeResult.caps && (
-                    <p className="text-[11px]">
-                      支持：{sProbeResult.caps.platen ? '平板' : ''}
-                      {sProbeResult.caps.adf ? ' / 送稿器' : ''}
-                      {sProbeResult.caps.duplex ? '（双面）' : ''} · 分辨率{' '}
-                      {sProbeResult.caps.resolutions.join('/')}
-                    </p>
+                  {sProbeResult.detail && (
+                    <p className="text-[11px] text-muted-foreground">{sProbeResult.detail}</p>
                   )}
                 </AlertDescription>
               </Alert>

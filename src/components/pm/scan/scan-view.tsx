@@ -14,6 +14,7 @@ import {
   FileStack,
   AlertCircle,
   Wifi,
+  Download,
 } from 'lucide-react'
 import { api, fileUrl, type ScannerConfig, type TrayPage } from '@/lib/pm'
 import { clientEsclScan } from '@/lib/client/escl-scan'
@@ -130,7 +131,7 @@ export function ScanView() {
         setScanError(
           'Brother 54921 私有协议是裸 TCP，浏览器无法直连。\n\n' +
             '解决方法（二选一）：\n' +
-            '① 在本电脑运行「Brother 本地桥接服务」，网页自动通过 localhost 连打印机\n' +
+            '① 下载并运行「Windows 桥接服务」（本页顶部有下载链接），双击运行后网页自动连打印机\n' +
             '② 改用手机相机拍照（功能等价，无需局域网）'
         )
         return
@@ -350,11 +351,23 @@ export function ScanView() {
                     <div className="space-y-1">
                       <p className="font-semibold text-sky-800">浏览器直连扫描仪（不经服务器）</p>
                       {scannerCfg?.protocol === 'brother' ? (
-                        <p className="leading-relaxed text-sky-700">
-                          Brother 54921 是裸 TCP 协议，浏览器无法直连。
-                          在本电脑运行「Brother 本地桥接服务」后，网页自动通过 localhost 连打印机。
-                          未运行桥接时可用手机相机拍照替代。
-                        </p>
+                        <>
+                          <p className="leading-relaxed text-sky-700">
+                            Brother 54921 是裸 TCP 协议，浏览器无法直连。
+                            下载并运行桥接服务后，网页自动通过 localhost 连打印机。
+                          </p>
+                          <a
+                            href="/papermarker-bridge.exe"
+                            download="papermarker-bridge.exe"
+                            className="mt-1 inline-flex items-center gap-1 rounded-md bg-sky-600 px-2.5 py-1 text-[11px] font-semibold text-white transition hover:bg-sky-700"
+                          >
+                            <Download className="h-3 w-3" />
+                            下载 Windows 桥接（双击运行）
+                          </a>
+                          <p className="text-[10px] text-sky-600">
+                            下载后双击运行，保持窗口打开即可。无需安装任何环境。
+                          </p>
+                        </>
                       ) : (
                         <p className="leading-relaxed text-sky-700">
                           扫描请求由浏览器直接发往你局域网内的扫描仪，不经云端服务器。

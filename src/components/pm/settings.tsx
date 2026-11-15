@@ -20,6 +20,8 @@ import {
   ShieldCheck,
   UserRound,
   Layers,
+  Bot,
+  Cable,
 } from 'lucide-react'
 import {
   api,
@@ -27,9 +29,11 @@ import {
   type ScannerConfig,
   type ApiKeyInfo,
   type MarkLayers,
+  type AiSource,
   setStoredToken,
 } from '@/lib/pm'
 import { clientProbeIpp, clientProbeBrother, clientProbeScanner } from '@/lib/client/net-probe'
+import { getBridgeUrl, setBridgeUrl as persistBridgeUrl, DEFAULT_BRIDGE_URL } from '@/lib/client/brother-bridge'
 import { usePm } from '@/lib/pm-store'
 import { useToast } from '@/hooks/use-toast'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -68,7 +72,7 @@ export function Settings() {
   } | null>(null)
 
   // 标记层默认（用户级，保存后影响新任务与重新生成）
-  const { layers, setLayers } = usePm()
+  const { layers, setLayers, setAiSource: setAiSourceGlobal, setBridgeUrl: setBridgeUrlGlobal } = usePm()
   const [layerDefaults, setLayerDefaults] = useState<MarkLayers>(layers)
   const [savingLayers, setSavingLayers] = useState(false)
 
@@ -91,6 +95,115 @@ export function Settings() {
   const [creatingKey, setCreatingKey] = useState(false)
   const [createdKey, setCreatedKey] = useState<{ name: string; key: string } | null>(null)
   const [origin, setOrigin] = useState('')
+
+  // ---------- 本地桥接地址 ----------
+  const [bridgeAddr, setBridgeAddr] = useState('')
+  const [savingBridge, setSavingBridge] = useState(false)
+  useEffect(() => {
+    const cur = getBridgeUrl()
+    setBridgeAddr(cur === DEFAULT_BRIDGE_URL ? '' : cur)
+  }, [])
+
+  const saveBridgeUrl = async () => {
+    setSavingBridge(true)
+    const v = bridgeAddr.trim().replace(/\/+$/, '')
+    if (v && !/^https?:\/\/.+/i.test(v)) {
+      toast({ title: '桥接地址无效', description: '必须是 http(s):// 开头的完整地址，如 http://192.168.1.50:3790', variant: 'destructive' })
+      setSavingBridge(false)
+      return
+    }
+    try {
+      persistBridgeUrl(v || DEFAULT_BRIDGE_URL)
+      setBridgeUrlGlobal(v)
+      await api.saveLayerConfig(layerDefaults, undefined, v)
+      toast({
+        title: '桥接地址已保存',
+        description: v ? `将连接 ${v}` : '使用默认 localhost:3790（本机桥接）',
+      })
+    } catch (e: any) {
+      toast({ title: '保存失败', description: e.message, variant: 'destructive' })
+    } finally {
+      setSavingBridge(false)
+    }
+  }
+
+  // ---------- 自定义 AI 源 ----------
+  const [ai, setAi] = useState<{
+    enabled: boolean
+    baseUrl: string
+    model: string
+    apiKey: string
+    temperature: number | null
+    apiKeyMasked: string
+    hasKey: boolean
+  } | null>(null)
+  const [aiSaving, setAiSaving] = useState(false)
+  const [aiTesting, setAiTesting] = useState(false)
+  const [aiTestResult, setAiTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
+
+  const loadAiSource = async () => {
+    try {
+      const r = await api.getAiSource()
+      setAi({
+        enabled: r.aiSource.enabled,
+        baseUrl: r.aiSource.baseUrl || '',
+        model: r.aiSource.model || '',
+        apiKey: '',
+        temperature: r.aiSource.temperature ?? null,
+        apiKeyMasked: r.aiSource.apiKeyMasked || '',
+        hasKey: !!r.aiSource.hasKey,
+      })
+    } catch {
+      setAi({ enabled: false, baseUrl: '', model: '', apiKey: '', temperature: null, apiKeyMasked: '', hasKey: false })
+    }
+  }
+
+  const saveAiSource = async (opts?: { silent?: boolean }) => {
+    if (!ai) return
+    setAiSaving(true)
+    try {
+      const r = await api.saveAiSource({
+        enabled: ai.enabled,
+        baseUrl: ai.baseUrl.trim(),
+        model: ai.model.trim(),
+        apiKey: ai.apiKey.trim() || (ai.hasKey ? '' : ''), // 空 = 不修改
+        temperature: ai.temperature ?? undefined,
+      })
+      setAi({
+        enabled: r.aiSource.enabled,
+        baseUrl: r.aiSource.baseUrl || '',
+        model: r.aiSource.model || '',
+        apiKey: '',
+        temperature: r.aiSource.temperature ?? null,
+        apiKeyMasked: r.aiSource.apiKeyMasked || '',
+        hasKey: !!r.aiSource.hasKey,
+      })
+      setAiSourceGlobal(r.aiSource)
+      if (!opts?.silent) toast({ title: r.msg || 'AI 源配置已保存' })
+    } catch (e: any) {
+      toast({ title: '保存失败', description: e.message, variant: 'destructive' })
+    } finally {
+      setAiSaving(false)
+    }
+  }
+
+  const testAiSource = async () => {
+    if (!ai) return
+    setAiTesting(true)
+    setAiTestResult(null)
+    try {
+      const r = await api.testAiSource({
+        baseUrl: ai.baseUrl.trim(),
+        apiKey: ai.apiKey.trim() || undefined,
+        model: ai.model.trim(),
+      })
+      setAiTestResult({ ok: r.ok, msg: r.msg })
+    } catch (e: any) {
+      setAiTestResult({ ok: false, msg: e.message })
+    } finally {
+      setAiTesting(false)
+    }
+  }
 
   const { toast } = useToast()
 
@@ -169,6 +282,7 @@ export function Settings() {
     if (p.status === 'fulfilled') setCfg(p.value.config)
     if (s.status === 'fulfilled') setScfg(s.value.config)
     if (k.status === 'fulfilled') setKeys(k.value.tokens)
+    loadAiSource()
     if (p.status === 'rejected') {
       setLoadError(p.reason?.message || '加载失败')
     } else {
@@ -373,7 +487,39 @@ export function Settings() {
                   )}
                 </div>
                 <p className="text-[11px] text-muted-foreground">
-                  批注/标记层会自动渲染为 JPEG 经 9100 端口直连下发；文字版 PDF（答案/解析）将降级浏览器打印
+                  批注/标记层经桥接按 PWGRASTER 协议（300dpi）光栅化后从 9100 端口下发；文字版 PDF（答案/解析）将降级浏览器打印
+                </p>
+              </div>
+
+              {/* 桥接地址（可选：手机访问电脑桥接时填写） */}
+              <div className="space-y-1.5 rounded-lg border border-dashed p-3">
+                <div className="flex items-center gap-1.5 text-xs font-medium">
+                  <Cable className="h-3.5 w-3.5 text-emerald-600" />
+                  桥接服务地址
+                  <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">可选</span>
+                </div>
+                <div className="flex gap-2">
+                  <Input
+                    id="bridgeUrl"
+                    value={bridgeAddr}
+                    onChange={(e) => setBridgeAddr(e.target.value)}
+                    placeholder="默认 http://localhost:3790（本机桥接）"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0"
+                    onClick={saveBridgeUrl}
+                    disabled={savingBridge}
+                  >
+                    {savingBridge ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-1 h-3.5 w-3.5" />}
+                    保存
+                  </Button>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  手机浏览器访问电脑上的桥接时，填电脑的局域网地址，如
+                  <code className="mx-1 rounded bg-muted px-1">http://192.168.1.50:3790</code>
+                  ；桥接程序已监听全部网卡。Android 桥接 APP 装在手机上时保持默认即可。
                 </p>
               </div>
             </>
@@ -449,7 +595,148 @@ export function Settings() {
           )}
         </CardContent>
       </Card>
-        {/* 骨架屏（与卡片同构，不闪屏） */}
+
+      {/* ============ 自定义 AI 源（OpenAI 兼容，完整自定义） ============ */}
+      <Card className="overflow-hidden border-violet-200 shadow-sm">
+        <div className="h-1 w-full bg-gradient-to-r from-violet-500 via-fuchsia-400 to-violet-500" aria-hidden />
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Bot className="h-4 w-4 text-violet-600" />
+            自定义 AI 源（批改模型）
+            {ai?.enabled && (
+              <Badge className="bg-violet-100 text-violet-700 hover:bg-violet-100">已启用</Badge>
+            )}
+          </CardTitle>
+          <CardDescription>
+            填入任意 OpenAI 兼容接口（中转站 / 自部署 vLLM / OneAPI / NewAPI / 官方 API 均可）。
+            启用后批改走你的模型；关闭或调用失败时自动回退内置模型，批改永不中断。
+          </CardDescription>
+        </CardHeader>
+        {ai && (
+          <CardContent className="space-y-3">
+            <div className="flex items-center justify-between rounded-lg border p-3">
+              <div>
+                <Label className="text-sm">启用自定义 AI 源</Label>
+                <p className="text-[11px] text-muted-foreground">
+                  {ai.enabled
+                    ? `当前批改使用 ${ai.model || '（未填模型）'}`
+                    : '关闭时使用内置 AI 批改'}
+                </p>
+              </div>
+              <Switch
+                checked={ai.enabled}
+                onCheckedChange={(v) => setAi({ ...ai, enabled: v })}
+              />
+            </div>
+
+            <div className={ai.enabled ? 'space-y-3' : 'space-y-3 opacity-60'}>
+              <div className="space-y-1.5">
+                <Label htmlFor="aiBase" className="text-xs">
+                  接口地址 Base URL（不含 /chat/completions）
+                </Label>
+                <Input
+                  id="aiBase"
+                  value={ai.baseUrl}
+                  onChange={(e) => setAi({ ...ai, baseUrl: e.target.value })}
+                  placeholder="https://api.openai.com/v1"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  实际请求 <code className="rounded bg-muted px-1">{ai.baseUrl || '…'}/chat/completions</code>
+                  ，需兼容 OpenAI Chat Completions 格式且支持图片输入（vision）
+                </p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="aiModel" className="text-xs">模型名称</Label>
+                  <Input
+                    id="aiModel"
+                    value={ai.model}
+                    onChange={(e) => setAi({ ...ai, model: e.target.value })}
+                    placeholder="例：gpt-4o / claude-sonnet-4-20250514 / glm-4.5v"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="aiKey" className="text-xs">
+                    API Key{ai.hasKey && ai.apiKeyMasked ? `（已保存 ${ai.apiKeyMasked}）` : ''}
+                  </Label>
+                  <Input
+                    id="aiKey"
+                    type="password"
+                    value={ai.apiKey}
+                    onChange={(e) => setAi({ ...ai, apiKey: e.target.value })}
+                    placeholder={ai.hasKey ? '已保存，留空则不修改' : 'sk-…'}
+                    autoComplete="off"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="aiTemp" className="text-xs">
+                  温度 Temperature（可选，0~2；留空用默认值）
+                </Label>
+                <Input
+                  id="aiTemp"
+                  type="number"
+                  step="0.1"
+                  min={0}
+                  max={2}
+                  value={ai.temperature ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    setAi({ ...ai, temperature: v === '' ? null : Math.min(2, Math.max(0, Number(v))) })
+                  }}
+                  placeholder="留空 = 模型默认"
+                  className="w-40"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <Button
+                onClick={testAiSource}
+                disabled={aiTesting || !ai.baseUrl.trim() || !ai.model.trim()}
+                variant="outline"
+                className="flex-1"
+              >
+                {aiTesting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wifi className="mr-2 h-4 w-4" />}
+                测试连接
+              </Button>
+              <Button
+                onClick={() => saveAiSource()}
+                disabled={aiSaving}
+                className="flex-1 bg-violet-600 hover:bg-violet-700"
+              >
+                {aiSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                保存 AI 源
+              </Button>
+            </div>
+
+            {aiTestResult && (
+              <Alert variant={aiTestResult.ok ? 'default' : 'destructive'}>
+                {aiTestResult.ok ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
+                <AlertTitle>{aiTestResult.ok ? '测试通过' : '测试失败'}</AlertTitle>
+                <AlertDescription>
+                  <p className="break-all">{aiTestResult.msg}</p>
+                </AlertDescription>
+              </Alert>
+            )}
+
+            <div className="rounded-lg bg-muted/50 p-3 text-[11px] leading-relaxed text-muted-foreground">
+              <p className="mb-1 font-medium text-foreground">工作方式</p>
+              <p>
+                1. 保存后，扫描上传的批改请求自动发往你的 AI 源（提示词与内置模型一致，返回 JSON 结构相同）。
+              </p>
+              <p>
+                2. 每次批改都会带上整卷图片（多页一次请求），请确认模型与中转站支持图片输入且额度充足。
+              </p>
+              <p>
+                3. 自定义源调用失败时自动回退内置模型，任务状态不会卡死；日志可在服务端 dev.log 查看。
+              </p>
+            </div>
+          </CardContent>
+        )}
+      </Card>
+
+      {/* 骨架屏（与卡片同构，不闪屏） */}
       {/* ============ 账号安全（修改密码） ============ */}
       <Card>
         <CardHeader>

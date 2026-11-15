@@ -52,6 +52,8 @@ export default function Home() {
     setAuthed,
     setLayers,
     setPrintDefaults,
+    setBridgeUrl,
+    setAiSource,
     logout,
     openTask,
     currentTaskId,
@@ -85,6 +87,15 @@ export default function Home() {
         setUsername(me.user.username)
         if (me.config?.layers) setLayers(normalizeLayers(me.config.layers))
         if (me.config?.printDefaults) setPrintDefaults(normalizePrintDefaults(me.config.printDefaults))
+        // 同步桥接地址到 localStorage（桥接客户端库读 localStorage）
+        if (typeof me.config?.bridgeUrl === 'string') {
+          setBridgeUrl(me.config.bridgeUrl)
+          try {
+            if (me.config.bridgeUrl) localStorage.setItem('pm_bridge_url', me.config.bridgeUrl)
+            else localStorage.removeItem('pm_bridge_url')
+          } catch {}
+        }
+        if (me.config?.aiSource) setAiSource(me.config.aiSource)
       } catch {
         // token 失效 / 网络异常：仅在校验确凿失败（401 等）时回登录
         if (alive) {

@@ -76,7 +76,7 @@ export async function POST(req: NextRequest) {
     const tid = task.id
     try {
       const paths = files.map((f) => absPath(f.filePath))
-      const result = await gradeImages(paths)
+      const result = await gradeImages(paths, uid)
       await persistGrade(tid, result)
 
       // 生成 PDF（失败不阻塞批改结果）

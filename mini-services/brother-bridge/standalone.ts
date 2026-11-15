@@ -15,6 +15,7 @@
  */
 import { Socket } from 'net'
 import { serve } from 'bun'
+import { jpegToA4Page, assemblePrintStream } from './pwg-encoder'
 
 const PORT = 3790
 const SCAN_PORT = 54921
@@ -22,15 +23,21 @@ const PRINT_PORT = 9100
 const UEL = Buffer.from([0x1b, 0x25, 0x2d, 0x31, 0x32, 0x33, 0x34, 0x35, 0x58])
 
 // ---------- HTTP ----------
+// CORS + PNA（Private Network Access）：HTTPS 公网页面 → 本地桥接属于
+// public → local 请求，Chrome/WebView 要求预检响应携带
+// Access-Control-Allow-Private-Network: true，否则 fetch 被浏览器拦截。
+const CORS_HEADERS: Record<string, string> = {
+  'Content-Type': 'application/json',
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Private-Network': 'true',
+}
+
 function json(data: any, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
-    },
+    headers: CORS_HEADERS,
   })
 }
 
@@ -285,30 +292,33 @@ async function brotherScanPages(
   }
 }
 
-// ---------- Brother 直连打印 ----------
+// ---------- Brother 直连打印（PWGRASTER 协议） ----------
 async function brotherPrintJpegs(
   host: string,
   jpegs: Buffer[],
   jobName = 'PaperMarker',
-  timeoutMs = 20000
+  timeoutMs = 120000
 ): Promise<{ ok: boolean; msg: string }> {
   if (jpegs.length === 0) return { ok: false, msg: '没有可打印的页面' }
   let sock: Socket | null = null
   try {
+    // 1. 光栅化：JPEG → A4 @300dpi RGB → PWG Raster 打印流
+    const pages = jpegs.map((j) => jpegToA4Page(j))
+    const stream = assemblePrintStream(pages, jobName)
+
+    // 2. 直连 9100 发送
     sock = await connect(host, PRINT_PORT, 5000)
-    for (let i = 0; i < jpegs.length; i++) {
-      const pjl = `\n@PJL JOB NAME="${jobName}-${i + 1}"\n@PJL ENTER LANGUAGE=JPEG\n`
-      const head = Buffer.concat([UEL, Buffer.from(pjl, 'ascii')])
-      sock.write(head)
-      sock.write(jpegs[i])
-      sock.write(UEL)
+    const CHUNK = 256 * 1024
+    for (let off = 0; off < stream.length; off += CHUNK) {
+      const okWrite = sock.write(stream.subarray(off, Math.min(off + CHUNK, stream.length)))
+      if (!okWrite) await new Promise<void>((r) => sock!.once('drain', () => r()))
     }
     await new Promise<void>((resolve) => {
       const t = setTimeout(() => resolve(), timeoutMs)
       sock!.once('error', () => { clearTimeout(t); resolve() })
       sock!.end(() => { clearTimeout(t); resolve() })
     })
-    return { ok: true, msg: `已向 ${host}:9100 下发 ${jpegs.length} 页直连打印任务` }
+    return { ok: true, msg: `已向 ${host}:9100 下发 ${jpegs.length} 页打印任务（PWGRASTER ${Math.round(stream.length / 1024)}KB）` }
   } catch (e: any) {
     return { ok: false, msg: `Brother 直连打印失败：${e?.message || e}` }
   } finally {
@@ -359,17 +369,11 @@ async function handleRequest(req: Request): Promise<Response> {
   const method = req.method
 
   if (method === 'OPTIONS') {
-    return new Response(null, {
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
-      },
-    })
+    return new Response(null, { headers: CORS_HEADERS })
   }
 
   if (path === '/ping' && method === 'GET') {
-    return json({ ok: true, service: 'brother-bridge', version: '1.0.0', port: PORT })
+    return json({ ok: true, service: 'brother-bridge', version: '2.0.0', port: PORT })
   }
 
   // Brother 扫描
@@ -469,9 +473,10 @@ process.on('uncaughtException', (e: any) => {
 })
 
 try {
+  // 监听所有网卡：手机浏览器可通过局域网 IP 访问本机桥接（需网页设置里填电脑 IP）
   serve({
     port: PORT,
-    hostname: '127.0.0.1',
+    hostname: '0.0.0.0',
     fetch: handleRequest,
   })
 } catch (e: any) {

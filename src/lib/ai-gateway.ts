@@ -3,6 +3,39 @@ import path from 'path'
 import sharp from 'sharp'
 import { db } from './db'
 
+/** 用户自定义 AI 源配置（OpenAI 兼容接口） */
+export interface AiSourceConfig {
+  enabled: boolean
+  baseUrl?: string
+  apiKey?: string
+  model?: string
+  temperature?: number
+}
+
+/** 从数据库读取用户自定义 AI 源配置（未开启或无效时返回 null） */
+export async function loadAiSource(uid: string): Promise<AiSourceConfig | null> {
+  try {
+    const u = await db.user.findUnique({ where: { id: uid }, select: { configJson: true } })
+    const cfg = JSON.parse(u?.configJson || '{}')
+    const s = cfg?.aiSource
+    if (!s || typeof s !== 'object' || s.enabled !== true) return null
+    const baseUrl = String(s.baseUrl || '').trim().replace(/\/+$/, '')
+    const apiKey = String(s.apiKey || '').trim()
+    const model = String(s.model || '').trim()
+    if (!baseUrl || !apiKey || !model) return null
+    if (!/^https?:\/\//i.test(baseUrl)) return null
+    return {
+      enabled: true,
+      baseUrl,
+      apiKey,
+      model,
+      temperature: typeof s.temperature === 'number' ? s.temperature : undefined,
+    }
+  } catch {
+    return null
+  }
+}
+
 // 判分类型
 export type JudgeType = 'correct' | 'wrong' | 'partial'
 
@@ -290,33 +323,104 @@ export function syntheticResult(pageCount = 1): AiGradeResult {
   }
 }
 
+/** OpenAI 兼容接口调用（自定义 AI 源）：chat/completions vision */
+async function customAiChat(
+  cfg: AiSourceConfig,
+  prompt: string,
+  content: any[],
+  timeoutMs = 180000
+): Promise<string> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+  try {
+    const url = `${cfg.baseUrl}/chat/completions`
+    const body: Record<string, any> = {
+      model: cfg.model,
+      messages: [{ role: 'user', content }],
+      stream: false,
+    }
+    if (typeof cfg.temperature === 'number') body.temperature = cfg.temperature
+    const resp = await fetch(url, {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${cfg.apiKey}`,
+      },
+      body: JSON.stringify(body),
+    })
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '')
+      throw new Error(`AI 源返回 HTTP ${resp.status}：${text.slice(0, 300)}`)
+    }
+    const json = await resp.json()
+    const text =
+      json?.choices?.[0]?.message?.content ??
+      json?.choices?.[0]?.text ??
+      (typeof json?.content === 'string' ? json.content : '')
+    if (!text) throw new Error('AI 源返回内容为空')
+    return String(text)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 /**
  * 调用 VLM 对试卷多页图片进行批改（一次请求携带全部页），返回结构化结果。
+ * 优先使用用户自定义 AI 源（OpenAI 兼容），否则用内置平台 SDK。
  * 失败时回退到合成结果，保证流程可演示。
  */
-export async function gradeImages(imagePaths: string[]): Promise<AiGradeResult> {
+export async function gradeImages(imagePaths: string[], uid?: string): Promise<AiGradeResult> {
   const pageCount = Math.max(1, imagePaths.length)
+  const prompt =
+    pageCount > 1
+      ? `本次提供同一份试卷的 ${pageCount} 页图片（按顺序第1页~第${pageCount}页）。请综合全部页面批改，每题的 pageNo 必须标注正确页码。\n\n${SYSTEM_PROMPT}`
+      : SYSTEM_PROMPT
+
+  const content: any[] = [{ type: 'text', text: prompt }]
+  for (const p of imagePaths) {
+    const buf = fs.readFileSync(p)
+    const base64 = buf.toString('base64')
+    const ext = path.extname(p).toLowerCase()
+    const mime =
+      ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg'
+    content.push({
+      type: 'image_url',
+      image_url: { url: `data:${mime};base64,${base64}` },
+    })
+  }
+
+  // 1. 用户自定义 AI 源优先
+  const custom = uid ? await loadAiSource(uid) : null
+  if (custom) {
+    try {
+      console.log(`[ai-gateway] 使用自定义 AI 源：${custom.baseUrl} model=${custom.model}`)
+      const text = await customAiChat(custom, prompt, content)
+      const parsed = extractJson(text)
+      if (parsed && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+        const questions = normalizeQuestions(parsed.questions)
+        const totalFull =
+          Number(parsed.totalFull) || questions.reduce((s, q) => s + q.fullScore, 0)
+        const totalGet =
+          Number(parsed.totalGet) || questions.reduce((s, q) => s + q.getScore, 0)
+        return {
+          paperName: String(parsed.paperName || '未命名试卷'),
+          studentName: String(parsed.studentName || ''),
+          totalFull,
+          totalGet,
+          questions,
+        }
+      }
+      console.warn('[ai-gateway] 自定义 AI 源返回内容无法解析，回退内置模型')
+    } catch (e: any) {
+      console.warn('[ai-gateway] 自定义 AI 源调用失败，回退内置模型:', e?.message)
+    }
+  }
+
+  // 2. 内置平台 SDK
   try {
     const ZAI = (await import('z-ai-web-dev-sdk')).default
     const zai = await ZAI.create()
-
-    const prompt =
-      pageCount > 1
-        ? `本次提供同一份试卷的 ${pageCount} 页图片（按顺序第1页~第${pageCount}页）。请综合全部页面批改，每题的 pageNo 必须标注正确页码。\n\n${SYSTEM_PROMPT}`
-        : SYSTEM_PROMPT
-
-    const content: any[] = [{ type: 'text', text: prompt }]
-    for (const p of imagePaths) {
-      const buf = fs.readFileSync(p)
-      const base64 = buf.toString('base64')
-      const ext = path.extname(p).toLowerCase()
-      const mime =
-        ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg'
-      content.push({
-        type: 'image_url',
-        image_url: { url: `data:${mime};base64,${base64}` },
-      })
-    }
 
     const response = await zai.chat.completions.createVision({
       messages: [{ role: 'user', content }],

@@ -25,14 +25,18 @@
  *  3. 网页自动探测 localhost:3790，通过桥接连打印机
  */
 import { serve } from 'bun'
+import { jpegToA4Page, assemblePrintStream } from './pwg-encoder'
 
 const PORT = 3790
 
-// CORS 头：允许任意来源（本地桥接，非公网服务）
+// CORS + PNA 头：HTTPS 公网页面 → 本地桥接属于 public → local 请求，
+// Chrome/WebView 要求预检响应携带 Access-Control-Allow-Private-Network: true
 const CORS = {
+  'Content-Type': 'application/json',
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Private-Network': 'true',
 }
 
 function json(data: any, status = 200) {
@@ -54,7 +58,7 @@ async function handleRequest(req: Request): Promise<Response> {
 
   // ---------- 健康检查 ----------
   if (path === '/ping' && method === 'GET') {
-    return json({ ok: true, service: 'brother-bridge', version: '1.0.0', port: PORT })
+    return json({ ok: true, service: 'brother-bridge', version: '2.0.0', port: PORT })
   }
 
   // ---------- Brother 扫描 ----------
@@ -95,9 +99,12 @@ async function handleRequest(req: Request): Promise<Response> {
     if (jpegs.length === 0) return json({ ok: false, msg: '无可打印页面' }, 400)
 
     try {
-      const { brotherPrintJpegs } = await import('./brother-scan-impl.ts')
       const buffers = jpegs.map((b: string) => Buffer.from(b, 'base64'))
-      const r = await brotherPrintJpegs(host, buffers, body.jobName || 'PaperMarker')
+      // 1. 光栅化：JPEG → A4 @300dpi RGB → PWG Raster 打印流
+      const pages = buffers.map((b: Buffer) => jpegToA4Page(b))
+      const stream = assemblePrintStream(pages, body.jobName || 'PaperMarker')
+      // 2. 直连 9100 发送
+      const r = await brotherSendStream(host, stream)
       return json(r, r.ok ? 200 : 500)
     } catch (e: any) {
       return json({ ok: false, msg: `桥接打印异常：${e?.message || e}` }, 500)
@@ -135,6 +142,58 @@ async function handleRequest(req: Request): Promise<Response> {
   return json({ ok: false, msg: `未知路径 ${method} ${path}` }, 404)
 }
 
+/** PWG Raster 打印流直连 9100 发送 */
+async function brotherSendStream(
+  host: string,
+  stream: Buffer,
+  timeoutMs = 120000
+): Promise<{ ok: boolean; msg: string }> {
+  const { Socket } = await import('net')
+  let sock: any = null
+  try {
+    sock = new Socket()
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        sock?.destroy()
+        reject(new Error(`连接 ${host}:9100 超时`))
+      }, 8000)
+      sock.once('connect', () => {
+        clearTimeout(timer)
+        resolve()
+      })
+      sock.once('error', (e: Error) => {
+        clearTimeout(timer)
+        reject(e)
+      })
+      sock.connect(9100, host)
+    })
+    const CHUNK = 256 * 1024
+    for (let off = 0; off < stream.length; off += CHUNK) {
+      const okWrite = sock.write(stream.subarray(off, Math.min(off + CHUNK, stream.length)))
+      if (!okWrite) await new Promise<void>((r) => sock.once('drain', () => r()))
+    }
+    await new Promise<void>((resolve) => {
+      const t = setTimeout(() => resolve(), timeoutMs)
+      sock.once('error', () => {
+        clearTimeout(t)
+        resolve()
+      })
+      sock.end(() => {
+        clearTimeout(t)
+        resolve()
+      })
+    })
+    return {
+      ok: true,
+      msg: `已向 ${host}:9100 下发打印任务（PWGRASTER ${Math.round(stream.length / 1024)}KB）`,
+    }
+  } catch (e: any) {
+    return { ok: false, msg: `Brother 直连打印失败：${e?.message || e}` }
+  } finally {
+    try { sock?.destroy() } catch {}
+  }
+}
+
 // ---------- 启动 ----------
 console.log('╔══════════════════════════════════════════════════════════╗')
 console.log('║  PaperMarker Brother 本地桥接服务                        ║')
@@ -161,7 +220,7 @@ process.on('uncaughtException', (e: any) => {
 
 serve({
   port: PORT,
-  hostname: '127.0.0.1', // 只监听本机，不对外
+  hostname: '0.0.0.0', // 监听所有网卡：手机浏览器可通过局域网 IP 访问本机桥接
   fetch: handleRequest,
 })
 

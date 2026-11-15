@@ -29,6 +29,8 @@ public class MainActivity extends Activity {
             + "2. 点击下方「启动桥接服务」\n"
             + "3. 在同手机浏览器打开 PaperMarker 网页\n"
             + "4. 网页自动探测 localhost:3790，经桥接连打印机\n\n"
+            + "v2.0 更新：修复打印（PWGRASTER 协议）与请求解析，"
+            + "支持 HTTPS 网页调用（PNA 预检）。\n\n"
             + "全程本地通信，不经云端。关闭本应用即停止桥接。");
         desc.setTextSize(13);
         desc.setLineSpacing(4, 1);

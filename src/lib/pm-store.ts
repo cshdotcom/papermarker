@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { TaskDetail, MarkLayers, PrintDefaults } from './pm'
+import type { TaskDetail, MarkLayers, PrintDefaults, AiSource } from './pm'
 import { DEFAULT_MARK_LAYERS, DEFAULT_PRINT_DEFAULTS } from './pm'
 
 export type View = 'dashboard' | 'review' | 'settings' | 'scan'
@@ -14,6 +14,10 @@ interface PmState {
   username: string
   layers: Layers
   printDefaults: PrintDefaults
+  /** 本地桥接地址（空串 = 默认 http://localhost:3790） */
+  bridgeUrl: string
+  /** 自定义 AI 源配置 */
+  aiSource: AiSource | null
   taskDetail: TaskDetail | null
   selectedAnnotationId: string | null
   /** 待剪辑照片队列（拍照/选图后先进入四角剪辑器） */
@@ -28,6 +32,8 @@ interface PmState {
   toggleLayer: (k: keyof Layers) => void
   setLayers: (l: Partial<Layers>) => void
   setPrintDefaults: (p: Partial<PrintDefaults>) => void
+  setBridgeUrl: (u: string) => void
+  setAiSource: (s: AiSource | null) => void
   setSelected: (id: string | null) => void
   pushPendingScanFiles: (files: File[]) => void
   consumePendingScanFiles: () => File[]
@@ -41,6 +47,8 @@ export const usePm = create<PmState>((set, get) => ({
   username: '',
   layers: { ...DEFAULT_MARK_LAYERS },
   printDefaults: { ...DEFAULT_PRINT_DEFAULTS },
+  bridgeUrl: '',
+  aiSource: null,
   taskDetail: null,
   selectedAnnotationId: null,
   pendingScanFiles: [],
@@ -62,6 +70,8 @@ export const usePm = create<PmState>((set, get) => ({
   toggleLayer: (k) => set((s) => ({ layers: { ...s.layers, [k]: !s.layers[k] } })),
   setLayers: (l) => set((s) => ({ layers: { ...s.layers, ...l } })),
   setPrintDefaults: (p) => set((s) => ({ printDefaults: { ...s.printDefaults, ...p } })),
+  setBridgeUrl: (u) => set({ bridgeUrl: u }),
+  setAiSource: (s) => set({ aiSource: s }),
   setSelected: (id) => set({ selectedAnnotationId: id }),
   pushPendingScanFiles: (files) =>
     set((s) => ({ pendingScanFiles: [...s.pendingScanFiles, ...files] })),

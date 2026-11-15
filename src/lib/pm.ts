@@ -76,6 +76,18 @@ export interface PrintDefaults {
   duplex?: boolean
 }
 
+/** 自定义 AI 源配置（OpenAI 兼容接口） */
+export interface AiSource {
+  enabled: boolean
+  baseUrl?: string
+  model?: string
+  temperature?: number | null
+  /** 只读：掩码 */
+  apiKeyMasked?: string
+  /** 只读：是否已保存 Key */
+  hasKey?: boolean
+}
+
 export const DEFAULT_PRINT_DEFAULTS: PrintDefaults = {
   method: 'brother',
   content: 'mark',
@@ -304,16 +316,40 @@ export const api = {
   me: () =>
     jfetch<{
       user: { id: string; username: string }
-      config?: { layers?: Partial<MarkLayers>; printDefaults?: Partial<PrintDefaults> }
+      config?: {
+        layers?: Partial<MarkLayers>
+        printDefaults?: Partial<PrintDefaults>
+        bridgeUrl?: string
+        aiSource?: AiSource
+      }
     }>('/api/auth/me'),
-  saveLayerConfig: (layers: Partial<MarkLayers>, printDefaults?: Partial<PrintDefaults>) =>
-    jfetch<{ code: number; layers: MarkLayers; printDefaults?: PrintDefaults }>(
+  saveLayerConfig: (
+    layers: Partial<MarkLayers>,
+    printDefaults?: Partial<PrintDefaults>,
+    bridgeUrl?: string
+  ) =>
+    jfetch<{ code: number; layers: MarkLayers; printDefaults?: PrintDefaults; bridgeUrl?: string }>(
       '/api/auth/config',
       {
         method: 'PUT',
-        body: JSON.stringify({ layers, printDefaults }),
+        body: JSON.stringify({ layers, printDefaults, bridgeUrl }),
       }
     ),
+  // 自定义 AI 源
+  getAiSource: () =>
+    jfetch<{ aiSource: AiSource }>('/api/ai/config', { timeoutMs: 15000 }),
+  saveAiSource: (aiSource: any) =>
+    jfetch<{ code: number; msg: string; aiSource: AiSource }>('/api/ai/config', {
+      method: 'PUT',
+      body: JSON.stringify({ aiSource }),
+      timeoutMs: 15000,
+    }),
+  testAiSource: (cfg: { baseUrl: string; apiKey?: string; model: string }) =>
+    jfetch<{ ok: boolean; msg: string; latencyMs?: number; reply?: string }>('/api/ai/test', {
+      method: 'POST',
+      body: JSON.stringify(cfg),
+      timeoutMs: 45000,
+    }),
   listTasks: () => jfetch<{ tasks: TaskSummary[] }>('/api/tasks'),
   getTask: (id: string) =>
     jfetch<{ task: TaskDetail }>(`/api/tasks/${id}`, { timeoutMs: 20000 }),

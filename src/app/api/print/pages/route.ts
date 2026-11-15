@@ -58,6 +58,7 @@ export async function GET(req: NextRequest) {
     const pages = await renderAnnotatedJpegs(pageImages, annotations, {
       withImage,
       layers,
+      width: 2480, // A4 @300dpi，打印清晰度与桥接光栅化对齐
       meta: { paperName: task.paperName, studentName: task.studentName },
     })
     return NextResponse.json({

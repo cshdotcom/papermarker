@@ -15,10 +15,10 @@
 | **登录门禁** | 账号密码登录（JWT），未登录无法访问任何页面与 API |
 | **应用连接** | 网页端创建/停用/吊销 API Key，Android APP 用 `X-API-Key` 直连全部 API |
 | **扫描采集** | 手机拍照（四角透视矫正）· eSCL/AirScan 网络扫描仪 · **Brother 54921 私有协议** |
-| **AI 批改** | VLM 视觉大模型逐题判分（√ / × / 半对√上叉），题框 ROI 相对坐标定位 |
+| **AI 批改** | VLM 视觉大模型逐题判分（√ / × / 半对√上叉），题框 ROI 相对坐标定位；**自定义 AI 源**（任意 OpenAI 兼容接口：中转站 / vLLM / OneAPI，设置页配置 + 连通性测试，失败自动回退内置模型） |
 | **人工复核** | 图层开关（题框/标记/得分/答案）· 批注编辑 · 批量复核 |
 | **PDF 导出** | 批注版 / **纯标记层（透明底可套印）** / 答案汇总 / 解析汇总，内嵌中文字体（思源黑体） |
-| **打印下发** | IPP 通用（631）· **Brother 9100 直连 JPEG** · 失败自动降级浏览器打印 |
+| **打印下发** | IPP 通用（631）· **Brother 9100 直连（PWGRASTER 300dpi 光栅）** · 失败自动降级浏览器打印 |
 | **快速复印** | 托盘页面一键下发打印机（单/双面、份数） |
 | **Android APP** | 原生 Kotlin/Java（零第三方依赖），拍照→裁切→上传→复核→打印全流程 |
 
@@ -38,12 +38,26 @@ connect :54921 → 等 "+OK 200" → 直发 ESC X 帧 → 图像流（JPEG 块�
 - 实现在 `src/lib/brother-scan.ts`（Node `net` 原生 Socket，正确处理 TCP 粘包）
 - 注意：**扫描会话独占**，扫描前请退出手机上的 iPrint&Scan APP
 
-### 打印（TCP 9100 直连，实验路线）
+### 打印（TCP 9100 直连，PWGRASTER 协议 · v2.0 已验证）
 ```
-PJL 头（@PJL ENTER LANGUAGE=JPEG）+ JPEG 字节 + UEL
+UEL + @PJL 头（SET PAPER/RENDERMODE/...）+ @PJL ENTER LANGUAGE=PWGRASTER
++ RaS2 + 1796B PWG 页头（A4 @300dpi 2480×3507）+ Brother RLE 行块 + UEL×2
 ```
-- 批注/标记层由 `src/lib/mark-jpeg.ts`（sharp + SVG）直接渲染为高分辨率 JPEG 下发，无需 PDF 光栅化
+- **v2.0 修复**：旧版 `@PJL ENTER LANGUAGE=JPEG` 不是 Brother 注册的 PJL 语言，固件静默丢弃（打印无反应的根因）。
+  现按官方 `brdcpt230filter` 逐字节逆向协议（vituxdxd/brother-dcpt230、hwisu/DCP-T420W 交叉验证）改为 PWGRASTER 光栅流：
+  JPEG → 300dpi RGB 光栅（白底信箱 A4）→ RLE 行压缩 → 打印机唯一接受的光栅语言。
+- 批注/标记层由 `src/lib/mark-jpeg.ts`（sharp + SVG）渲染 2480px（A4@300dpi）JPEG，经桥接/服务端光栅化后下发
 - 文字版 PDF（答案/解析）自动降级为浏览器打印
+
+### 本地桥接（v2.0）
+浏览器无法发起裸 TCP，桥接把 54921/9100 封装成 HTTP：
+- **Windows**：`papermarker-bridge.exe`（单文件，双击运行，监听 0.0.0.0:3790）
+- **Android**：`PaperMarker-Bridge.apk`（前台服务，localhost:3790）
+- **v2.0 修复**：
+  1. Android 桥接 HTTP 解析 bug（BufferedReader 预读吞掉 POST body → 打印/扫描请求永远到不了打印机）改为单流字节级解析
+  2. 全部响应补齐 `Access-Control-Allow-Private-Network: true`（PNA），HTTPS 页面不再被 Chrome 拦截
+  3. 桥接地址可在网页设置页配置（手机浏览器访问电脑桥接时填电脑局域网 IP）
+- 协议实现：服务端 `src/lib/brother-print.ts` + `src/lib/brother-scan.ts`；桥接 `mini-services/brother-bridge/`（bun，jpeg-js 纯 JS 光栅化）；安卓 `android-bridge/`（BitmapFactory 光栅化）
 
 ## 快速开始
 

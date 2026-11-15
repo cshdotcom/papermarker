@@ -351,28 +351,34 @@ export async function brotherScanPages(
 }
 
 /**
- * Brother 9100 端口直连打印（实验路线 C）：
- * PJL 头 + JPEG 字节 + UEL。喷墨机（DCP-T428W 等）PDL 为
- * Jpeg_BH9 族，部分机型接受该封装直接出纸。
+ * Brother 9100 端口直连打印（PWGRASTER 协议，官方驱动逆向验证）：
+ * JPEG → 光栅化 → UEL + @PJL 头 + ENTER LANGUAGE=PWGRASTER + RaS2 + 1796B 页头 + RLE 行块 + UEL×2。
+ * 此前的 `ENTER LANGUAGE=JPEG` 不是 Brother 注册的 PJL language，会被固件静默丢弃。
  */
 export async function brotherPrintJpegs(
   host: string,
   jpegs: Buffer[],
   jobName = 'PaperMarker',
-  timeoutMs = 20000
+  timeoutMs = 60000,
+  colorMode: 'color' | 'gray' = 'color'
 ): Promise<{ ok: boolean; msg: string }> {
   if (jpegs.length === 0) return { ok: false, msg: '没有可打印的页面' }
   let sock: net.Socket | null = null
   try {
+    // 1. 光栅化：JPEG → A4 @300dpi RGB（每份拷贝同一份光栅，重复组装）
+    const { jpegBufferToA4Page, assemblePrintStream } = await import('./brother-print')
+    const pages: import('./brother-print').BrotherRasterPage[] = []
+    for (const j of jpegs) {
+      pages.push(await jpegBufferToA4Page(j, colorMode))
+    }
+    const stream = assemblePrintStream(pages, { colorMode, jobName })
+
+    // 2. 直连 9100 发送
     sock = await connect(host, 9100, 8000)
-    for (let i = 0; i < jpegs.length; i++) {
-      const pjl =
-        `\n@PJL JOB NAME="${jobName}-${i + 1}"\n` +
-        `@PJL ENTER LANGUAGE=JPEG\n`
-      const head = Buffer.concat([UEL, Buffer.from(pjl, 'ascii')])
-      sock.write(head)
-      sock.write(jpegs[i])
-      sock.write(UEL)
+    const CHUNK = 256 * 1024
+    for (let off = 0; off < stream.length; off += CHUNK) {
+      const okWrite = sock.write(stream.subarray(off, Math.min(off + CHUNK, stream.length)))
+      if (!okWrite) await new Promise<void>((r) => sock!.once('drain', () => r()))
     }
     await new Promise<void>((resolve, reject) => {
       const t = setTimeout(() => {
@@ -388,7 +394,10 @@ export async function brotherPrintJpegs(
         resolve()
       })
     })
-    return { ok: true, msg: `已向 ${host}:9100 下发 ${jpegs.length} 页直连打印任务` }
+    return {
+      ok: true,
+      msg: `已向 ${host}:9100 下发 ${jpegs.length} 页打印任务（PWGRASTER ${Math.round(stream.length / 1024)}KB）`,
+    }
   } catch (e: any) {
     return { ok: false, msg: `Brother 直连打印失败：${e?.message || e}` }
   } finally {

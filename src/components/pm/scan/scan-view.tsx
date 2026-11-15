@@ -128,11 +128,17 @@ export function ScanView() {
       const bridge = await detectBridge()
       if (!bridge.running) {
         setScanning(false)
+        const blockedHint =
+          bridge.reason === 'blocked_or_timeout'
+            ? '\n⚠ 桥接地址无响应或被浏览器拦截：若桥接在另一台设备上，请在「设置 → 网络打印机配置」中填写桥接地址（如 http://192.168.x.x:3790）。'
+            : ''
         setScanError(
           'Brother 54921 私有协议是裸 TCP，浏览器无法直连。\n\n' +
-            '解决方法（二选一）：\n' +
-            '① 下载并运行「Windows 桥接服务」（本页顶部有下载链接），双击运行后网页自动连打印机\n' +
-            '② 改用手机相机拍照（功能等价，无需局域网）'
+            '解决方法（三选一）：\n' +
+            '① Windows 电脑：下载并运行「Windows 桥接服务」（本页顶部有下载链接）\n' +
+            '② 安卓手机：安装 PaperMarker-Bridge APP（GitHub Release 下载），启动桥接后本机浏览器自动连接\n' +
+            '③ 改用手机相机拍照（功能等价，无需局域网）' +
+            blockedHint
         )
         return
       }

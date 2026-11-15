@@ -63,6 +63,7 @@ const CONTENT_OPTIONS: {
 ]
 
 type PrintMethod = 'ipp' | 'brother'
+// 注意：早期版本误用 'browser' 作为初始值（不在类型内），已改为空值态 + 默认回退
 
 const METHOD_OPTIONS: {
   key: PrintMethod
@@ -75,10 +76,10 @@ const METHOD_OPTIONS: {
   {
     key: 'brother',
     label: 'Brother 桥接打印',
-    desc: '浏览器 → localhost 桥接 → 打印机 9100',
+    desc: '浏览器 → 本地桥接 → 打印机 9100',
     icon: Wifi,
-    hint: 'Brother DCP-T428W 喷墨机专用，需本电脑运行桥接服务（推荐）',
-    warning: '需先下载并运行 papermarker-bridge.exe（扫描页有下载链接）。桥接运行后浏览器经 localhost 直连打印机 9100，不经服务器。',
+    hint: 'Brother DCP-T428W 喷墨机专用，PWGRASTER 协议 300dpi 光栅直打（推荐）',
+    warning: '需先运行桥接服务（Windows 电脑运行 papermarker-bridge.exe，或手机安装 PaperMarker-Bridge APP）。桥接地址可在设置页配置（手机访问电脑桥接时填电脑局域网 IP）。',
   },
   {
     key: 'ipp',
@@ -200,7 +201,7 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
   // 打印对话框状态
   const [dialogOpen, setDialogOpen] = useState(false)
   const [chosenContent, setChosenContent] = useState<SubType>('mark')
-  const [chosenMethod, setChosenMethod] = useState<PrintMethod>('browser')
+  const [chosenMethod, setChosenMethod] = useState<PrintMethod>('brother')
   const [saveAsDefault, setSaveAsDefault] = useState(true)
   const [printerCfg, setPrinterCfg] = useState<PrinterConfig | null>(null)
   const [bridgeRunning, setBridgeRunning] = useState<boolean | null>(null)
@@ -317,7 +318,7 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
     }
   }
 
-  /** Brother 桥接直连打印：浏览器 → localhost:3790 → TCP 9100（不经服务器） */
+  /** Brother 桥接直连打印：浏览器 → 桥接 → TCP 9100（不经服务器） */
   const doBridgePrint = async (sub: SubType) => {
     setBusy(sub)
     try {
@@ -326,19 +327,26 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
         toast({ title: '请先在设置中配置 Brother 打印机 IP', variant: 'destructive' })
         return
       }
-      // 探测桥接是否运行
+      // 探测桥接是否运行（结果复用，避免重复探测）
       const bridge = await detectBridge()
+      setBridgeRunning(bridge.running)
       if (!bridge.running) {
+        const hint =
+          bridge.reason === 'blocked_or_timeout'
+            ? '桥接无响应或被浏览器拦截：请确认桥接程序正在运行；若网页是 HTTPS 且桥接填了局域网地址，请检查地址是否正确。'
+            : '请运行桥接服务：Windows 电脑运行 papermarker-bridge.exe，或手机安装 PaperMarker-Bridge APP（设置页可配置桥接地址）'
         toast({
           title: '本地桥接未运行',
-          description: '请下载并运行 papermarker-bridge.exe（扫描页有下载链接），或改用浏览器打印',
+          description: hint,
           variant: 'destructive',
         })
         return
       }
-      // 获取渲染后的批注页 JPEG（dataUrl）
+      // 获取渲染后的批注页 JPEG（dataUrl）。
+      // mark/marks：原图 + 标记层；answer/parse：纯标记层底（服务器暂不渲染文字版 JPEG，
+      // 降级为标记层 + 提示，完整文字版请用浏览器打印/下载 PDF）
       const withImage = sub === 'mark' || sub === 'marks'
-      const subForRender = sub === 'answer' || sub === 'parse' ? 'mark' : sub
+      const isTextVersion = sub === 'answer' || sub === 'parse'
       const r = await api.printPages(task.id, withImage, layers)
       if (!r.pages || r.pages.length === 0) {
         toast({ title: '没有可打印的页面', variant: 'destructive' })
@@ -350,7 +358,14 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
       const allJpegs: string[] = []
       for (let i = 0; i < copies; i++) allJpegs.push(...jpegs)
 
-      const result = await bridgePrint(host, allJpegs, `PaperMarker-${subForRender}`)
+      if (isTextVersion) {
+        toast({
+          title: `${SUB_LABEL[sub]}为文字版`,
+          description: '桥接打印按标记层页面下发；如需纯文字版请用「浏览器打印」或下载 PDF',
+        })
+      }
+
+      const result = await bridgePrint(host, allJpegs, `PaperMarker-${sub}`)
       if (result.ok) {
         toast({ title: `${SUB_LABEL[sub]} 桥接打印成功`, description: result.msg })
       } else {
@@ -387,12 +402,16 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
     if (chosenMethod === 'brother') {
       // Brother 直连：必须走本地桥接（不经服务器）
       const bridge = await detectBridge()
+      setBridgeRunning(bridge.running)
       if (bridge.running && printerCfg?.host) {
         await doBridgePrint(chosenContent)
       } else if (!bridge.running) {
         toast({
           title: '本地桥接未运行',
-          description: 'Brother 打印需要本地桥接服务。请下载运行 papermarker-bridge.exe',
+          description:
+            bridge.reason === 'blocked_or_timeout'
+              ? '桥接无响应或被浏览器拦截，请确认桥接程序正在运行'
+              : 'Brother 打印需要本地桥接服务。Windows 运行 papermarker-bridge.exe；手机安装 PaperMarker-Bridge APP',
           variant: 'destructive',
         })
       } else {
@@ -410,6 +429,7 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
     const content = (printDefaults.content || 'mark') as SubType
     if (method === 'brother') {
       const bridge = await detectBridge()
+      setBridgeRunning(bridge.running)
       if (bridge.running && printerCfg?.host) {
         await doBridgePrint(content)
       } else if (!bridge.running) {

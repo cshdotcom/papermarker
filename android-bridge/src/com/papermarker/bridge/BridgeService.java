@@ -14,10 +14,19 @@ import org.json.*;
 /**
  * 前台服务：在 localhost:3790 运行 HTTP 服务器，桥接浏览器 → Brother TCP。
  *
+ * v2.0.0 修复（v1.x 安卓完全无法打印/扫描的根因）：
+ *  1. HTTP 解析 bug：旧版用 BufferedReader 读请求头（8KB 缓冲预读会把
+ *     POST body 的前缀字节吞掉后丢弃），再切回裸 InputStream 读 body，
+ *     导致 body 截断 → JSON 解析失败 → 请求永远到不了打印机。
+ *     现在改用单一 BufferedInputStream 同时解析头部与 body。
+ *  2. PNA（Private Network Access）：HTTPS 页面 → localhost 属 public → local
+ *     请求，Chrome/WebView 要求预检与响应携带
+ *     Access-Control-Allow-Private-Network: true，否则 fetch 被浏览器拦截。
+ *
  * 接口：
  *  GET  /ping          健康检查
  *  POST /scan          Brother 扫描 → 返回 base64 JPEG 数组
- *  POST /print         Brother 直连打印
+ *  POST /print         Brother 直连打印（PWGRASTER 协议）
  *  POST /probe/scan    探测扫描仪
  *  POST /probe/print   探测打印机
  */
@@ -27,7 +36,7 @@ public class BridgeService extends Service {
     static final int NOTIF_ID = 1;
 
     private ServerSocket server;
-    private boolean running = false;
+    private volatile boolean running = false;
     private ExecutorService pool = Executors.newCachedThreadPool();
 
     @Override
@@ -58,34 +67,58 @@ public class BridgeService extends Service {
         }
     }
 
+    /** 手工逐行读头部（从同一 BufferedInputStream 读，绝不预丢 body 字节） */
+    static String readLine(BufferedInputStream in) throws IOException {
+        StringBuilder sb = new StringBuilder(128);
+        int b;
+        while ((b = in.read()) != -1) {
+            if (b == '\n') break;
+            if (b != '\r') sb.append((char) b);
+            if (sb.length() > 16384) throw new IOException("请求行过长");
+        }
+        return sb.toString();
+    }
+
     void handle(Socket client) {
         try {
-            BufferedReader reader = new BufferedReader(new InputStreamReader(client.getInputStream()));
-            String line = reader.readLine();
-            if (line == null) return;
-            String[] parts = line.split(" ");
+            client.setTcpNoDelay(true);
+            BufferedInputStream in = new BufferedInputStream(client.getInputStream(), 65536);
+
+            String requestLine = readLine(in);
+            if (requestLine.isEmpty()) return;
+            String[] parts = requestLine.split(" ");
+            if (parts.length < 2) return;
             String method = parts[0];
             String path = parts[1];
+
             int contentLength = 0;
-            // 读 headers
-            while (!(line = reader.readLine()).isEmpty()) {
+            while (true) {
+                String line = readLine(in);
+                if (line.isEmpty()) break;
                 int ci = line.toLowerCase().indexOf("content-length:");
                 if (ci >= 0) {
-                    contentLength = Integer.parseInt(line.substring(ci + 15).trim());
+                    try {
+                        contentLength = Integer.parseInt(line.substring(ci + 15).trim());
+                    } catch (NumberFormatException ignore) {}
                 }
             }
+
             byte[] body = null;
             if (contentLength > 0) {
+                if (contentLength > 64 * 1024 * 1024) {
+                    sendResponse(client, 413, "{\"ok\":false,\"msg\":\"请求体过大\"}");
+                    return;
+                }
                 body = new byte[contentLength];
                 int off = 0;
                 while (off < contentLength) {
-                    int r = client.getInputStream().read(body, off, contentLength - off);
+                    int r = in.read(body, off, contentLength - off);
                     if (r < 0) break;
                     off += r;
                 }
             }
 
-            // CORS preflight
+            // CORS / PNA preflight
             if ("OPTIONS".equals(method)) {
                 sendResponse(client, 200, "");
                 return;
@@ -98,8 +131,10 @@ public class BridgeService extends Service {
             } catch (Exception e) {
                 status = 500;
                 JSONObject err = new JSONObject();
-                err.put("ok", false);
-                err.put("msg", "处理异常：" + e.getMessage());
+                try {
+                    err.put("ok", false);
+                    err.put("msg", "处理异常：" + e.getMessage());
+                } catch (Exception ignore) {}
                 json = err.toString();
             }
             sendResponse(client, status, json);
@@ -115,12 +150,13 @@ public class BridgeService extends Service {
             JSONObject r = new JSONObject();
             r.put("ok", true);
             r.put("service", "brother-bridge-android");
-            r.put("version", "1.0.0");
+            r.put("version", "2.0.0");
             r.put("port", PORT);
             return r.toString();
         }
 
-        JSONObject req = body != null && body.length > 0 ? new JSONObject(new String(body, "UTF-8")) : new JSONObject();
+        JSONObject req = body != null && body.length > 0
+                ? new JSONObject(new String(body, "UTF-8")) : new JSONObject();
         String host = req.optString("host", "").trim();
         JSONObject resp = new JSONObject();
 
@@ -187,15 +223,18 @@ public class BridgeService extends Service {
 
     void sendResponse(Socket client, int status, String json) throws Exception {
         OutputStream out = client.getOutputStream();
+        byte[] bodyBytes = json.getBytes("UTF-8");
         String head = "HTTP/1.1 " + status + " OK\r\n" +
             "Content-Type: application/json; charset=utf-8\r\n" +
             "Access-Control-Allow-Origin: *\r\n" +
             "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n" +
             "Access-Control-Allow-Headers: Content-Type\r\n" +
-            "Content-Length: " + json.getBytes("UTF-8").length + "\r\n" +
+            // PNA：Chrome/WebView 对 HTTPS 页面 → localhost 的请求要求此头，缺失会被拦截
+            "Access-Control-Allow-Private-Network: true\r\n" +
+            "Content-Length: " + bodyBytes.length + "\r\n" +
             "Connection: close\r\n\r\n";
         out.write(head.getBytes("ASCII"));
-        out.write(json.getBytes("UTF-8"));
+        out.write(bodyBytes);
         out.flush();
     }
 

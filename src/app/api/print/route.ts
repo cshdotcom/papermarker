@@ -90,6 +90,7 @@ export async function POST(req: NextRequest) {
           const pages = await renderAnnotatedJpegs(pageImages, annotations, {
             withImage: subType === 'mark',
             layers,
+            width: 2480, // A4 @300dpi
             meta: { paperName: task.paperName, studentName: task.studentName },
           })
           jpegs.push(...pages.map((p) => p.jpeg))

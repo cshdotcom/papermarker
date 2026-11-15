@@ -3,10 +3,12 @@ package com.papermarker.bridge;
 import android.app.*;
 import android.content.*;
 import android.os.*;
+import android.util.Base64;
 import android.util.Log;
 import java.io.*;
 import java.net.*;
 import java.util.*;
+import java.util.concurrent.*;
 import org.json.*;
 
 /**

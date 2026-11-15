@@ -42,7 +42,12 @@ public class MainActivity extends Activity {
             else startService(svc);
             Toast.makeText(this, "桥接服务已启动（localhost:3790）", Toast.LENGTH_LONG).show();
         });
-        startBtn.setMargin(0, 48, 0, 0);
+        LinearLayout.LayoutParams startParams = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        startParams.topMargin = 48;
+        startBtn.setLayoutParams(startParams);
         root.addView(startBtn);
 
         Button stopBtn = new Button(this);

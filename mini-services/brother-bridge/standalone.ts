@@ -193,55 +193,77 @@ async function brotherScanPages(
     let cur: Buffer[] = []
     let curLen = 0
     let pageIndex = 0
-    const CHUNK_TIMEOUT = 45000
+    // 彩色模式数据量大（3 倍灰度），超时给足
+    const isColor = mode === 'C256' || mode === 'ERRDIF'
+    const CHUNK_TIMEOUT = isColor ? 90000 : 45000
 
     while (true) {
-      const hdr = await rd.read(10, CHUNK_TIMEOUT)
-      const id = hdr[0]
+      // 先读 1 字节块类型（协议：1 字节头，bit7=1 为控制头）
+      const headBuf = await rd.read(1, CHUNK_TIMEOUT)
+      const id = headBuf[0]
+
+      // 0x80 = 整次扫描结束
       if (id === 0x80) {
         if (curLen > 0) {
           pages.push({ index: pageIndex++, buffer: Buffer.concat(cur) })
           cur = []
           curLen = 0
         }
+        trace.push('扫描结束（0x80）')
         break
       }
-      const magic = hdr[1] | (hdr[2] << 8)
-      const pageId = hdr[3] | (hdr[4] << 8)
-      if (magic !== 0x0007) {
+
+      // 0x82 = 本页结束，0x83 = 全部结束（控制头族）
+      if (id === 0x82 || id === 0x83) {
         const lb = await rd.read(2, 5000).catch(() => null)
         if (lb && lb.length === 2) {
           const n = lb[0] | (lb[1] << 8)
           if (n > 0) await rd.read(n, 10000).catch(() => null)
         }
-        if (id === 0x82 || id === 0x83) {
-          if (curLen > 0) {
-            pages.push({ index: pageIndex++, buffer: Buffer.concat(cur) })
-            cur = []
-            curLen = 0
-          }
-          if (id === 0x83) break
-          if (!feeder) break
-        }
-        continue
-      }
-      if (id === 0x82) {
         if (curLen > 0) {
           pages.push({ index: pageIndex++, buffer: Buffer.concat(cur) })
           cur = []
           curLen = 0
         }
-        trace.push(`第 ${pageId} 页接收完成`)
+        trace.push(`页结束（0x${id.toString(16)}）`)
+        if (id === 0x83) break
         if (!feeder) break
         continue
       }
+
+      // 其他控制头（0x81/0x84-0x87）：读 2 字节长度 + 跳过数据
+      if ((id & 0x80) !== 0) {
+        const lb = await rd.read(2, 5000).catch(() => null)
+        if (lb && lb.length === 2) {
+          const n = lb[0] | (lb[1] << 8)
+          if (n > 0) await rd.read(n, 10000).catch(() => null)
+        }
+        continue
+      }
+
+      // 0x64 = JPEG 数据块（实测 10 字节头 + 2 字节块长 + 数据）
+      if (id === 0x64) {
+        const restHdr = await rd.read(9, CHUNK_TIMEOUT)
+        const magic = restHdr[0] | (restHdr[1] << 8)
+        const pageId = restHdr[2] | (restHdr[3] << 8)
+        const lb = await rd.read(2, 10000)
+        const len = lb[0] | (lb[1] << 8)
+        if (len === 0) continue
+        const payload = await rd.read(len, CHUNK_TIMEOUT)
+        cur.push(payload)
+        curLen += len
+        if (trace.length < 30) trace.push(`已接收 ${curLen} 字节（页 ${pageId}，magic=0x${magic.toString(16)}）`)
+        continue
+      }
+
+      // 其他数据块类型：2 字节长度 + 数据
       const lb = await rd.read(2, 10000)
       const len = lb[0] | (lb[1] << 8)
-      if (len === 0) continue
-      const payload = await rd.read(len, CHUNK_TIMEOUT)
-      cur.push(payload)
-      curLen += len
-      if (trace.length < 30) trace.push(`已接收 ${curLen} 字节（页 ${pageId}）`)
+      if (len > 0) {
+        const payload = await rd.read(len, CHUNK_TIMEOUT)
+        cur.push(payload)
+        curLen += len
+      }
     }
 
     const valid = pages.filter(

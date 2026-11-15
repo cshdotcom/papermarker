@@ -68,6 +68,32 @@ export const DEFAULT_MARK_LAYERS: MarkLayers = {
   banner: true,
 }
 
+/** 打印默认方案（保存到用户配置，可一键打印） */
+export interface PrintDefaults {
+  method?: 'browser' | 'ipp' | 'brother'
+  content?: 'mark' | 'marks' | 'answer' | 'parse'
+  copies?: number
+  duplex?: boolean
+}
+
+export const DEFAULT_PRINT_DEFAULTS: PrintDefaults = {
+  method: 'browser',
+  content: 'mark',
+  copies: 1,
+  duplex: false,
+}
+
+export function normalizePrintDefaults(raw: any): PrintDefaults {
+  const d = { ...DEFAULT_PRINT_DEFAULTS }
+  if (raw && typeof raw === 'object') {
+    if (['browser', 'ipp', 'brother'].includes(raw.method)) d.method = raw.method
+    if (['mark', 'marks', 'answer', 'parse'].includes(raw.content)) d.content = raw.content
+    if (typeof raw.copies === 'number' && raw.copies >= 1 && raw.copies <= 20) d.copies = raw.copies
+    if (typeof raw.duplex === 'boolean') d.duplex = raw.duplex
+  }
+  return d
+}
+
 export function normalizeLayers(raw: any): MarkLayers {
   const l = { ...DEFAULT_MARK_LAYERS }
   if (raw && typeof raw === 'object') {
@@ -278,13 +304,16 @@ export const api = {
   me: () =>
     jfetch<{
       user: { id: string; username: string }
-      config?: { layers?: Partial<MarkLayers> }
+      config?: { layers?: Partial<MarkLayers>; printDefaults?: Partial<PrintDefaults> }
     }>('/api/auth/me'),
-  saveLayerConfig: (layers: Partial<MarkLayers>) =>
-    jfetch<{ code: number; layers: MarkLayers }>('/api/auth/config', {
-      method: 'PUT',
-      body: JSON.stringify({ layers }),
-    }),
+  saveLayerConfig: (layers: Partial<MarkLayers>, printDefaults?: Partial<PrintDefaults>) =>
+    jfetch<{ code: number; layers: MarkLayers; printDefaults?: PrintDefaults }>(
+      '/api/auth/config',
+      {
+        method: 'PUT',
+        body: JSON.stringify({ layers, printDefaults }),
+      }
+    ),
   listTasks: () => jfetch<{ tasks: TaskSummary[] }>('/api/tasks'),
   getTask: (id: string) =>
     jfetch<{ task: TaskDetail }>(`/api/tasks/${id}`, { timeoutMs: 20000 }),

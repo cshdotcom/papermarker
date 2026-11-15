@@ -20,6 +20,7 @@ import {
   ArrowRight,
   AlertCircle,
   CheckCircle2,
+  Settings as SettingsIcon,
 } from 'lucide-react'
 import { api, fileUrl, type TaskDetail, type MarkLayers, type PrinterConfig } from '@/lib/pm'
 import { detectBridge, bridgePrint } from '@/lib/client/brother-bridge'
@@ -213,14 +214,23 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [chosenContent, setChosenContent] = useState<SubType>('mark')
   const [chosenMethod, setChosenMethod] = useState<PrintMethod>('browser')
+  const [saveAsDefault, setSaveAsDefault] = useState(true)
   const [printerCfg, setPrinterCfg] = useState<PrinterConfig | null>(null)
   const [bridgeRunning, setBridgeRunning] = useState<boolean | null>(null)
-  const { layers, toggleLayer } = usePm()
+  const { layers, toggleLayer, printDefaults, setPrintDefaults } = usePm()
   const { toast } = useToast()
 
   // 加载打印机配置（判断 Brother host + mode）
   useEffect(() => {
     api.getPrinter().then((r) => setPrinterCfg(r.config)).catch(() => {})
+  }, [])
+
+  // 从全局配置初始化打印默认值
+  useEffect(() => {
+    if (printDefaults.method) setChosenMethod(printDefaults.method)
+    if (printDefaults.content) setChosenContent(printDefaults.content)
+    if (printDefaults.copies) setCopies(printDefaults.copies)
+    if (typeof printDefaults.duplex === 'boolean') setDuplex(printDefaults.duplex)
   }, [])
 
   // 打印对话框打开时探测桥接状态
@@ -366,8 +376,22 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
     }
   }
 
-  /** 确认打印：按所选方式分发 */
+  /** 确认打印：按所选方式分发，同时保存为默认（可选） */
   const confirmPrint = async () => {
+    // 保存为默认打印方案
+    if (saveAsDefault) {
+      const newDefaults = {
+        method: chosenMethod,
+        content: chosenContent,
+        copies,
+        duplex,
+      }
+      setPrintDefaults(newDefaults)
+      try {
+        await api.saveLayerConfig(layers, newDefaults)
+      } catch {}
+    }
+
     setDialogOpen(false)
     if (chosenMethod === 'browser') {
       // 浏览器打印只支持 mark / marks
@@ -390,6 +414,32 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
     } else {
       // IPP：只能走服务器（需自托管）
       await doDirectPrint(chosenContent)
+    }
+  }
+
+  /** 一键打印：用默认方案直接打印，不弹对话框 */
+  const oneClickPrint = async () => {
+    const method = printDefaults.method || 'browser'
+    const content = (printDefaults.content || 'mark') as SubType
+    if (method === 'browser') {
+      await doBrowserPrint(content === 'answer' || content === 'parse' ? 'mark' : content)
+    } else if (method === 'brother') {
+      const bridge = await detectBridge()
+      if (bridge.running && printerCfg?.host) {
+        await doBridgePrint(content)
+      } else if (!bridge.running) {
+        // 桥接未运行 → 打开对话框让用户选择其他方式
+        toast({
+          title: '桥接未运行，请选择打印方式',
+          description: '本地桥接服务未运行，点击「选择打印方式」手动选择',
+        })
+        setDialogOpen(true)
+      } else {
+        toast({ title: '请先在设置中配置 Brother 打印机 IP', variant: 'destructive' })
+      }
+    } else {
+      // IPP
+      await doDirectPrint(content)
     }
   }
 
@@ -480,16 +530,35 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
           </div>
         )}
 
-        {/* 主打印按钮：打开选择对话框 */}
-        <Button
-          onClick={() => setDialogOpen(true)}
-          disabled={busy !== null}
-          className="w-full bg-emerald-600 text-base hover:bg-emerald-700"
-          size="lg"
-        >
-          {busy ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Printer className="mr-2 h-5 w-5" />}
-          开始打印
-        </Button>
+        {/* 主打印按钮：一键打印 + 选择方式 */}
+        <div className="flex gap-2">
+          <Button
+            onClick={oneClickPrint}
+            disabled={busy !== null}
+            className="flex-1 bg-emerald-600 text-base hover:bg-emerald-700"
+            size="lg"
+          >
+            {busy ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Printer className="mr-2 h-5 w-5" />}
+            一键打印
+          </Button>
+          <Button
+            onClick={() => setDialogOpen(true)}
+            disabled={busy !== null}
+            variant="outline"
+            size="lg"
+            title="选择打印方式"
+          >
+            <SettingsIcon className="h-5 w-5" />
+          </Button>
+        </div>
+        {/* 默认方案提示 */}
+        <div className="rounded-md bg-muted/40 px-3 py-1.5 text-[11px] text-muted-foreground">
+          默认方案：{METHOD_OPTIONS.find((m) => m.key === printDefaults.method)?.label || '浏览器打印'} ·{' '}
+          {SUB_LABEL[(printDefaults.content || 'mark') as SubType]} ·{' '}
+          {printDefaults.copies || 1} 份 ·{' '}
+          {printDefaults.duplex ? '双面' : '单面'}
+          <span className="ml-1 text-muted-foreground/60">（点击右侧齿轮可更改）</span>
+        </div>
 
         {/* PDF 浏览 / 下载 */}
         <div className="border-t pt-3">
@@ -655,18 +724,31 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
             </div>
           </div>
 
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)}>
-              取消
-            </Button>
-            <Button
-              onClick={confirmPrint}
-              disabled={busy !== null}
-              className="bg-emerald-600 hover:bg-emerald-700"
-            >
-              {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Printer className="mr-1 h-4 w-4" />}
-              确认打印
-            </Button>
+          <DialogFooter className="flex-col gap-3 sm:flex-col">
+            <label className="flex cursor-pointer items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={saveAsDefault}
+                onChange={(e) => setSaveAsDefault(e.target.checked)}
+                className="h-3.5 w-3.5 rounded border-input"
+              />
+              <span className="text-muted-foreground">
+                保存为默认打印方案（下次一键打印直接使用）
+              </span>
+            </label>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setDialogOpen(false)}>
+                取消
+              </Button>
+              <Button
+                onClick={confirmPrint}
+                disabled={busy !== null}
+                className="bg-emerald-600 hover:bg-emerald-700"
+              >
+                {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Printer className="mr-1 h-4 w-4" />}
+                确认打印
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

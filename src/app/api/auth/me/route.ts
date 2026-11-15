@@ -5,7 +5,7 @@ import { db } from '@/lib/db'
 export async function GET(req: NextRequest) {
   const auth = await authGuard(req)
   if (!auth.ok) return auth.resp
-  // 附带用户标记层默认配置（configJson.layers）
+  // 附带用户配置（configJson.layers + configJson.printDefaults）
   let config: any = {}
   try {
     const u = await db.user.findUnique({ where: { id: auth.uid } })

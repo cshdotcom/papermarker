@@ -10,7 +10,7 @@ import {
   LogOut,
 } from 'lucide-react'
 import { usePm } from '@/lib/pm-store'
-import { api, getStoredToken, getCachedUsername, normalizeLayers } from '@/lib/pm'
+import { api, getStoredToken, getCachedUsername, normalizeLayers, normalizePrintDefaults } from '@/lib/pm'
 import { Dashboard } from '@/components/pm/dashboard'
 import { Review } from '@/components/pm/review'
 import { Settings } from '@/components/pm/settings'
@@ -51,6 +51,7 @@ export default function Home() {
     setUsername,
     setAuthed,
     setLayers,
+    setPrintDefaults,
     logout,
     openTask,
     currentTaskId,
@@ -83,6 +84,7 @@ export default function Home() {
         setAuthed(true)
         setUsername(me.user.username)
         if (me.config?.layers) setLayers(normalizeLayers(me.config.layers))
+        if (me.config?.printDefaults) setPrintDefaults(normalizePrintDefaults(me.config.printDefaults))
       } catch {
         // token 失效 / 网络异常：仅在校验确凿失败（401 等）时回登录
         if (alive) {

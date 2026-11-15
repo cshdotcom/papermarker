@@ -1,6 +1,6 @@
 import { create } from 'zustand'
-import type { TaskDetail, MarkLayers } from './pm'
-import { DEFAULT_MARK_LAYERS } from './pm'
+import type { TaskDetail, MarkLayers, PrintDefaults } from './pm'
+import { DEFAULT_MARK_LAYERS, DEFAULT_PRINT_DEFAULTS } from './pm'
 
 export type View = 'dashboard' | 'review' | 'settings' | 'scan'
 
@@ -13,6 +13,7 @@ interface PmState {
   authLoading: boolean
   username: string
   layers: Layers
+  printDefaults: PrintDefaults
   taskDetail: TaskDetail | null
   selectedAnnotationId: string | null
   /** 待剪辑照片队列（拍照/选图后先进入四角剪辑器） */
@@ -26,6 +27,7 @@ interface PmState {
   setTaskDetail: (t: TaskDetail | null) => void
   toggleLayer: (k: keyof Layers) => void
   setLayers: (l: Partial<Layers>) => void
+  setPrintDefaults: (p: Partial<PrintDefaults>) => void
   setSelected: (id: string | null) => void
   pushPendingScanFiles: (files: File[]) => void
   consumePendingScanFiles: () => File[]
@@ -38,6 +40,7 @@ export const usePm = create<PmState>((set, get) => ({
   authLoading: false,
   username: '',
   layers: { ...DEFAULT_MARK_LAYERS },
+  printDefaults: { ...DEFAULT_PRINT_DEFAULTS },
   taskDetail: null,
   selectedAnnotationId: null,
   pendingScanFiles: [],
@@ -58,6 +61,7 @@ export const usePm = create<PmState>((set, get) => ({
   setTaskDetail: (t) => set({ taskDetail: t }),
   toggleLayer: (k) => set((s) => ({ layers: { ...s.layers, [k]: !s.layers[k] } })),
   setLayers: (l) => set((s) => ({ layers: { ...s.layers, ...l } })),
+  setPrintDefaults: (p) => set((s) => ({ printDefaults: { ...s.printDefaults, ...p } })),
   setSelected: (id) => set({ selectedAnnotationId: id }),
   pushPendingScanFiles: (files) =>
     set((s) => ({ pendingScanFiles: [...s.pendingScanFiles, ...files] })),

@@ -34,33 +34,41 @@ export async function POST(req: NextRequest) {
   if (!auth.ok) return auth.resp
   const uid = auth.uid
 
-  const form = await req.formData()
-  const file = form.get('image')
-  if (!file || !(file instanceof File)) {
-    return NextResponse.json({ code: 400, msg: '缺少图片' }, { status: 400 })
+  try {
+    const form = await req.formData()
+    const file = form.get('image')
+    if (!file || !(file instanceof File)) {
+      return NextResponse.json({ code: 400, msg: '缺少图片' }, { status: 400 })
+    }
+    const buf = Buffer.from(await file.arrayBuffer())
+
+    const outPath = path.join(processedDir(), genFilename('.jpg'))
+    // 客户端已完成增强，这里只做 EXIF 旋转 + 轻压缩，避免二次处理冲掉黑白增强效果
+    const outBuf = await sharp(buf).rotate().jpeg({ quality: 92 }).toBuffer()
+    fs.writeFileSync(outPath, outBuf)
+    const meta = await sharp(outBuf).metadata()
+
+    const f = await db.file.create({
+      data: {
+        fileType: 'scan_tmp',
+        filePath: relPath(outPath),
+        userId: uid,
+        width: meta.width || 0,
+        height: meta.height || 0,
+      },
+    })
+
+    return NextResponse.json({
+      code: 200,
+      page: { id: f.id, url: `/api/file/${f.id}`, w: meta.width || 0, h: meta.height || 0 },
+    })
+  } catch (e: any) {
+    console.error('[scan/pages] upload error:', e?.message || e)
+    return NextResponse.json(
+      { code: 500, msg: `上传失败：${e?.message || '服务器内部错误'}` },
+      { status: 500 }
+    )
   }
-  const buf = Buffer.from(await file.arrayBuffer())
-
-  const outPath = path.join(processedDir(), genFilename('.jpg'))
-  // 客户端已完成增强，这里只做 EXIF 旋转 + 轻压缩，避免二次处理冲掉黑白增强效果
-  const outBuf = await sharp(buf).rotate().jpeg({ quality: 92 }).toBuffer()
-  fs.writeFileSync(outPath, outBuf)
-  const meta = await sharp(outBuf).metadata()
-
-  const f = await db.file.create({
-    data: {
-      fileType: 'scan_tmp',
-      filePath: relPath(outPath),
-      userId: uid,
-      width: meta.width || 0,
-      height: meta.height || 0,
-    },
-  })
-
-  return NextResponse.json({
-    code: 200,
-    page: { id: f.id, url: `/api/file/${f.id}`, w: meta.width || 0, h: meta.height || 0 },
-  })
 }
 
 /** 删除托盘页：?id=xxx 删除指定页；无参数清空全部 */

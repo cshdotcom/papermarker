@@ -13,8 +13,10 @@ import {
   Copy,
   FileStack,
   AlertCircle,
+  Wifi,
 } from 'lucide-react'
 import { api, fileUrl, type ScannerConfig, type TrayPage } from '@/lib/pm'
+import { clientEsclScan } from '@/lib/client/escl-scan'
 import { usePm } from '@/lib/pm-store'
 import { useToast } from '@/hooks/use-toast'
 import { useIsMobile } from '@/hooks/use-mobile'
@@ -107,19 +109,51 @@ export function ScanView() {
     setPendingFiles((q) => q.slice(1))
   }
 
-  // 网络扫描仪取页
+  // 网络扫描仪取页（客户端直连，不经服务器）
   const doScan = async () => {
     if (!scannerCfg) return
     setScanning(true)
     setScanError(null)
+
+    // Brother 54921 是裸 TCP 协议，浏览器无法发起 —— 只能用相机或 APK
+    if (scannerCfg.protocol === 'brother') {
+      setScanning(false)
+      setScanError(
+        'Brother 54921 私有协议是裸 TCP，浏览器不支持直连。\n\n请改用「手机相机拍照」采集试卷，或使用 Android 客户端（原生 TCP 不受浏览器限制）。'
+      )
+      return
+    }
+
+    // eSCL 是 HTTP 协议，浏览器可直连（需打印机支持 CORS）
     try {
-      const r = await api.esclScan({
+      const r = await clientEsclScan(scannerCfg.esclUrl, {
         source: scannerCfg.source,
         colorMode: scannerCfg.colorMode,
         dpi: scannerCfg.dpi,
       })
-      setPages((ps) => [...ps, ...r.pages.map((p) => ({ ...p }))])
-      toast({ title: r.msg, description: `来源：${scannerCfg.source === 'Feeder' ? '送稿器' : '平板'}` })
+      if (!r.ok) {
+        setScanError(r.msg)
+        toast({ title: '扫描失败', description: r.msg, variant: 'destructive' })
+        return
+      }
+      // 客户端扫描的页面是 Blob，需上传到服务器托盘存储
+      const uploadedPages: TrayItem[] = []
+      for (const p of r.pages) {
+        try {
+          const up = await api.uploadTrayPage(p.blob)
+          uploadedPages.push({ id: up.page.id, url: up.page.url, w: up.page.w, h: up.page.h })
+          URL.revokeObjectURL(p.url) // 释放 object URL
+        } catch (e: any) {
+          toast({ title: '页面上传失败', description: e.message, variant: 'destructive' })
+        }
+      }
+      if (uploadedPages.length > 0) {
+        setPages((ps) => [...ps, ...uploadedPages])
+        toast({
+          title: r.msg,
+          description: `来源：${scannerCfg.source === 'Feeder' ? '送稿器' : '平板'}`,
+        })
+      }
     } catch (e: any) {
       const msg = e.message || '未知错误'
       setScanError(msg)
@@ -255,23 +289,23 @@ export function ScanView() {
               />
             ) : (
               <div className="space-y-3">
-                {/* 云端部署提示：服务器无法访问局域网扫描仪 */}
-                <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs">
+                {/* 客户端直连说明：浏览器直接连扫描仪，不经服务器 */}
+                <div className="rounded-lg border border-sky-300 bg-sky-50 p-3 text-xs">
                   <div className="flex items-start gap-2">
-                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                    <Wifi className="mt-0.5 h-4 w-4 shrink-0 text-sky-600" />
                     <div className="space-y-1">
-                      <p className="font-semibold text-amber-800">网络扫描需自托管</p>
-                      <p className="leading-relaxed text-amber-700">
-                        当前应用部署在云端，服务器无法连接你局域网内的扫描仪/打印机一体机。
-                        网络扫描功能仅在<b>应用自托管</b>（服务器与打印机同一局域网）时可用。
+                      <p className="font-semibold text-sky-800">浏览器直连扫描仪（不经服务器）</p>
+                      <p className="leading-relaxed text-sky-700">
+                        扫描请求由浏览器直接发往你局域网内的扫描仪，不经云端服务器。
+                        需要扫描仪支持 CORS（佳能/惠普多数支持，兄弟/爱普生多数不支持）。
                       </p>
-                      <p className="leading-relaxed text-amber-700">
-                        云端环境下请使用<b>手机相机拍照</b>采集试卷 —— 功能完全等价，无需局域网。
+                      <p className="leading-relaxed text-sky-700">
+                        Brother 54921 私有协议是裸 TCP，浏览器无法直连 —— 请用<b>手机相机</b>或<b>Android 客户端</b>。
                       </p>
                       <Button
                         size="sm"
                         variant="outline"
-                        className="mt-1 h-7 border-amber-400 text-amber-700 hover:bg-amber-100"
+                        className="mt-1 h-7 border-sky-400 text-sky-700 hover:bg-sky-100"
                         onClick={() => setMode('camera')}
                       >
                         <Camera className="mr-1 h-3.5 w-3.5" />

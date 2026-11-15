@@ -47,7 +47,8 @@ export async function clientProbeUrl(url: string, timeoutMs = 4000): Promise<Pro
       mode: 'no-cors',
       cache: 'no-store',
       signal: ctrl.signal,
-      redirect: 'manual',
+      // no-cors 模式下 redirect 必须为 follow，否则浏览器报 CORS 错误
+      redirect: 'follow',
     })
     clearTimeout(timer)
     const elapsed = Date.now() - t0

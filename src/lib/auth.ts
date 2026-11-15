@@ -92,11 +92,13 @@ export async function authGuard(req: NextRequest): Promise<AuthGuardOk | AuthGua
   const token = await getTokenFromReq(req)
   const payload = await verifyToken(token)
   if (payload) {
-    // 延迟 lastLoginAt
-    await db.user.update({
-      where: { id: payload.uid },
-      data: { lastLoginAt: new Date() },
-    }).catch(() => {})
+    // 延迟 lastLoginAt（fire-and-forget，不阻塞请求；记录不存在时静默忽略）
+    db.user
+      .update({
+        where: { id: payload.uid },
+        data: { lastLoginAt: new Date() },
+      })
+      .catch(() => {})
     return { ok: true, uid: payload.uid, username: payload.username }
   }
   return {

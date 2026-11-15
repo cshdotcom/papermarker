@@ -215,9 +215,9 @@ export async function brotherScanPages(
     const contrast = params.contrast ?? 50
     const feeder = params.source === 'Feeder'
 
-    sock = await connect(host, PORT, 6000)
+    sock = await connect(host, PORT, 3000)
     const rd = new SocketReader(sock)
-    const welcome = await rd.readLine(8000)
+    const welcome = await rd.readLine(3000)
     trace.push(`welcome: ${welcome}`)
     if (!welcome.startsWith('+')) {
       return { ok: false, msg: `设备未就绪：${welcome || '(空)'}（可能被 iPrint&Scan 占用）`, pages: [], trace }

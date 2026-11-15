@@ -32,6 +32,11 @@ async function saveJpegToTray(buf: Buffer, uid: string) {
  * 网络扫描：按配置协议分发
  *  - escl：eSCL/AirScan 通用（HTTP 8095）
  *  - brother：Brother 私有协议（TCP 54921，ESC X 直扫，真机已打通）
+ *
+ * 架构说明：
+ *  服务器需与扫描仪在同一局域网才能连接 192.168.x.x。
+ *  云端部署时服务器无法访问局域网设备 → 返回明确提示，
+ *  引导用户使用「手机相机拍照」或自托管应用。
  * 扫描结果存入扫描托盘（fileType=scan_tmp，未关联任务）
  */
 export async function POST(req: NextRequest) {
@@ -52,7 +57,6 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       )
     }
-    // eSCL 色彩枚举 → Brother 模式映射
     const colorMap: Record<string, BrotherColorMode> = {
       RGB24: 'C256',
       Grayscale8: 'CGRAY',
@@ -64,7 +68,12 @@ export async function POST(req: NextRequest) {
       source: (body.source || cfg?.source || 'Platen') === 'Feeder' ? 'Feeder' : 'Platen',
     })
     if (!r.ok) {
-      return NextResponse.json({ code: 500, msg: r.msg, trace: r.trace }, { status: 500 })
+      // 服务器在云端无法访问局域网设备 → 给出可操作的提示
+      const isCloud = !host.startsWith('127.') && !host.startsWith('localhost')
+      const hint = isCloud
+        ? `${r.msg}\n\n提示：服务器在云端，无法访问局域网打印机 ${host}。请改用「手机相机拍照」批改，或将应用自托管到与打印机同一网络的设备上。`
+        : r.msg
+      return NextResponse.json({ code: 500, msg: hint, trace: r.trace }, { status: 500 })
     }
     const pages = []
     for (const p of r.pages) {
@@ -88,7 +97,9 @@ export async function POST(req: NextRequest) {
 
   const r = await scanPages(esclUrl, { source, colorMode, dpi })
   if (!r.ok) {
-    return NextResponse.json({ code: 500, msg: r.msg }, { status: 500 })
+    // 服务器在云端无法访问局域网设备 → 给出可操作的提示
+    const hint = `${r.msg}\n\n提示：服务器在云端，无法访问局域网扫描仪。请改用「手机相机拍照」批改，或将应用自托管到与扫描仪同一网络的设备上。`
+    return NextResponse.json({ code: 500, msg: hint }, { status: 500 })
   }
 
   const pages = []

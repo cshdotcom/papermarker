@@ -12,6 +12,7 @@ import {
   Sparkles,
   Copy,
   FileStack,
+  AlertCircle,
 } from 'lucide-react'
 import { api, fileUrl, type ScannerConfig, type TrayPage } from '@/lib/pm'
 import { usePm } from '@/lib/pm-store'
@@ -51,6 +52,7 @@ export function ScanView() {
   const [copying, setCopying] = useState(false)
   const [copyDuplex, setCopyDuplex] = useState(false)
   const [scanning, setScanning] = useState(false)
+  const [scanError, setScanError] = useState<string | null>(null)
   const [scannerCfg, setScannerCfg] = useState<ScannerConfig | null>(null)
 
   useEffect(() => {
@@ -109,6 +111,7 @@ export function ScanView() {
   const doScan = async () => {
     if (!scannerCfg) return
     setScanning(true)
+    setScanError(null)
     try {
       const r = await api.esclScan({
         source: scannerCfg.source,
@@ -118,7 +121,9 @@ export function ScanView() {
       setPages((ps) => [...ps, ...r.pages.map((p) => ({ ...p }))])
       toast({ title: r.msg, description: `来源：${scannerCfg.source === 'Feeder' ? '送稿器' : '平板'}` })
     } catch (e: any) {
-      toast({ title: '扫描失败', description: e.message, variant: 'destructive' })
+      const msg = e.message || '未知错误'
+      setScanError(msg)
+      toast({ title: '扫描失败', description: msg, variant: 'destructive' })
     } finally {
       setScanning(false)
     }
@@ -340,6 +345,24 @@ export function ScanView() {
                         </>
                       )}
                     </Button>
+                    {scanError && (
+                      <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800">
+                        <div className="flex items-center gap-1 font-semibold">
+                          <AlertCircle className="h-3.5 w-3.5" />
+                          扫描失败
+                        </div>
+                        <p className="mt-1 whitespace-pre-line leading-relaxed">{scanError}</p>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="mt-2 h-7 border-amber-400 text-amber-700 hover:bg-amber-100"
+                          onClick={() => setMode('camera')}
+                        >
+                          <Camera className="mr-1 h-3.5 w-3.5" />
+                          改用手机相机拍照
+                        </Button>
+                      </div>
+                    )}
                   </>
                 ) : (
                   <div className="flex items-center justify-center py-10">

@@ -20,7 +20,7 @@ export interface BridgeStatus {
 }
 
 /** 探测本地桥接服务是否在运行 */
-export async function detectBridge(timeoutMs = 1500): Promise<BridgeStatus> {
+export async function detectBridge(timeoutMs = 3000): Promise<BridgeStatus> {
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), timeoutMs)
   try {

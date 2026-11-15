@@ -19,6 +19,7 @@ import {
   Smartphone,
   ArrowRight,
   AlertCircle,
+  CheckCircle2,
 } from 'lucide-react'
 import { api, fileUrl, type TaskDetail, type MarkLayers, type PrinterConfig } from '@/lib/pm'
 import { detectBridge, bridgePrint } from '@/lib/client/brother-bridge'
@@ -213,6 +214,7 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
   const [chosenContent, setChosenContent] = useState<SubType>('mark')
   const [chosenMethod, setChosenMethod] = useState<PrintMethod>('browser')
   const [printerCfg, setPrinterCfg] = useState<PrinterConfig | null>(null)
+  const [bridgeRunning, setBridgeRunning] = useState<boolean | null>(null)
   const { layers, toggleLayer } = usePm()
   const { toast } = useToast()
 
@@ -220,6 +222,13 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
   useEffect(() => {
     api.getPrinter().then((r) => setPrinterCfg(r.config)).catch(() => {})
   }, [])
+
+  // 打印对话框打开时探测桥接状态
+  useEffect(() => {
+    if (dialogOpen && printerCfg?.mode === 'brother') {
+      detectBridge().then((b) => setBridgeRunning(b.running))
+    }
+  }, [dialogOpen, printerCfg?.mode])
 
   const fileIds: Record<SubType, string | undefined> = {
     mark: task.markPdfFileId,
@@ -364,13 +373,19 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
       // 浏览器打印只支持 mark / marks
       await doBrowserPrint(chosenContent === 'answer' || chosenContent === 'parse' ? 'mark' : chosenContent)
     } else if (chosenMethod === 'brother') {
-      // Brother 直连：优先走本地桥接（不经服务器），桥接不可用时降级服务器
+      // Brother 直连：必须走本地桥接（不经服务器）
       const bridge = await detectBridge()
       if (bridge.running && printerCfg?.host) {
         await doBridgePrint(chosenContent)
+      } else if (!bridge.running) {
+        // 桥接未运行 → 不降级服务器，明确提示
+        toast({
+          title: '本地桥接未运行',
+          description: 'Brother 打印需要本地桥接服务。请下载运行 papermarker-bridge.exe，或改用浏览器打印',
+          variant: 'destructive',
+        })
       } else {
-        // 桥接未运行 → 降级服务器（仅自托管可用）
-        await doDirectPrint(chosenContent)
+        toast({ title: '请先在设置中配置 Brother 打印机 IP', variant: 'destructive' })
       }
     } else {
       // IPP：只能走服务器（需自托管）
@@ -591,6 +606,19 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
                           <div className="mt-1 flex items-start gap-1 rounded bg-amber-50 p-1.5 text-[10px] leading-tight text-amber-700 ring-1 ring-amber-200">
                             <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
                             <span>{m.warning}</span>
+                          </div>
+                        )}
+                        {/* Brother 桥接状态指示器 */}
+                        {m.key === 'brother' && bridgeRunning !== null && (
+                          <div
+                            className={`mt-1 flex items-center gap-1 rounded px-2 py-1 text-[10px] font-medium ${
+                              bridgeRunning
+                                ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
+                                : 'bg-red-50 text-red-700 ring-1 ring-red-200'
+                            }`}
+                          >
+                            {bridgeRunning ? <CheckCircle2 className="h-3 w-3" /> : <AlertCircle className="h-3 w-3" />}
+                            {bridgeRunning ? '桥接已连接 ✓' : '桥接未运行 ✗ 点击下载'}
                           </div>
                         )}
                       </div>

@@ -432,8 +432,33 @@ const BANNER = `
 
 console.log(BANNER)
 
-serve({
-  port: PORT,
-  hostname: '127.0.0.1',
-  fetch: handleRequest,
+// 处理端口被占用：EADDRINUSE 时提示用户并退出（而非静默崩溃）
+process.on('uncaughtException', (e: any) => {
+  if (e?.code === 'EADDRINUSE') {
+    console.error('\n❌ 端口 3790 已被占用！')
+    console.error('   可能是另一个桥接服务已在运行。')
+    console.error('   请关闭其他实例后重试。')
+    console.error('   按任意键退出...')
+    process.stdin.resume()
+    process.stdin.once('data', () => process.exit(1))
+  } else {
+    console.error('未捕获异常:', e?.message || e)
+  }
 })
+
+try {
+  serve({
+    port: PORT,
+    hostname: '127.0.0.1',
+    fetch: handleRequest,
+  })
+} catch (e: any) {
+  if (e?.code === 'EADDRINUSE' || String(e?.message || '').includes('EADDRINUSE')) {
+    console.error('\n❌ 端口 3790 已被占用！请关闭其他桥接实例后重试。')
+    console.error('   按任意键退出...')
+    process.stdin.resume()
+    process.stdin.once('data', () => process.exit(1))
+  } else {
+    throw e
+  }
+}

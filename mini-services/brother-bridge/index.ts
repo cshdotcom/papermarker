@@ -150,6 +150,15 @@ console.log('║  全程本地通信，不经云端。                          
 console.log('║  保持本窗口打开，网页会自动探测并连接。                   ║')
 console.log('╚══════════════════════════════════════════════════════════╝')
 
+// 处理端口被占用
+process.on('uncaughtException', (e: any) => {
+  if (e?.code === 'EADDRINUSE' || String(e?.message || '').includes('EADDRINUSE')) {
+    console.error('\n❌ 端口 3790 已被占用！请关闭其他桥接实例后重试。')
+  } else {
+    console.error('未捕获异常:', e?.message || e)
+  }
+})
+
 serve({
   port: PORT,
   hostname: '127.0.0.1', // 只监听本机，不对外

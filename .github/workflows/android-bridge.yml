@@ -36,37 +36,30 @@ jobs:
           BT="$ANDROID_HOME/build-tools/34.0.0"
           AJAR="$ANDROID_HOME/platforms/android-34/android.jar"
           echo "android_home=$ANDROID_HOME" >> $GITHUB_OUTPUT
-          echo "aapt2=$BT/aapt2" >> $GITHUB_OUTPUT
-          echo "d8=$BT/d8" >> $GITHUB_OUTPUT
-          echo "zipalign=$BT/zipalign" >> $GITHUB_OUTPUT
-          echo "apksigner=$BT/apksigner" >> $GITHUB_OUTPUT
+          echo "bt=$BT" >> $GITHUB_OUTPUT
           echo "android_jar=$AJAR" >> $GITHUB_OUTPUT
-          echo "=== verify ==="
           ls -la "$BT/aapt2" "$BT/d8" "$BT/zipalign" "$BT/apksigner" "$AJAR"
 
       - name: Generate debug keystore
         run: |
-          if [ ! -f android-bridge/papermarker.keystore ]; then
-            keytool -genkey -v \
-              -keystore android-bridge/papermarker.keystore \
-              -alias papermarker \
-              -keyalg RSA -keysize 2048 -validity 10000 \
-              -storepass papermarker2024 \
-              -keypass papermarker2024 \
-              -dname "CN=PaperMarker, OU=Dev, O=PaperMarker, L=City, ST=State, C=CN"
-          fi
+          keytool -genkey -v \
+            -keystore android-bridge/papermarker.keystore \
+            -alias papermarker \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass papermarker2024 \
+            -keypass papermarker2024 \
+            -dname "CN=PaperMarker, OU=Dev, O=PaperMarker, L=City, ST=State, C=CN"
 
       - name: Build APK
         run: |
           cd android-bridge
-          ANDROID_HOME=${{ steps.find-tools.outputs.android_home }}
-          BT="$ANDROID_HOME/build-tools/34.0.0"
+          BT="${{ steps.find-tools.outputs.bt }}"
           AJAR="${{ steps.find-tools.outputs.android_jar }}"
           OUT=build
           rm -rf "$OUT"
-          mkdir -p "$OUT/classes" "$OUT/gen"
+          mkdir -p "$OUT/classes" "$OUT/gen" "$OUT/res-compiled"
 
-          echo "[1/6] 生成最小资源"
+          echo "[1/7] 准备资源文件"
           mkdir -p "$OUT/res/values"
           cat > "$OUT/res/values/strings.xml" << 'XML'
           <?xml version="1.0" encoding="utf-8"?>
@@ -81,29 +74,33 @@ jobs:
           </resources>
           XML
 
-          echo "[2/6] aapt2 link 生成 R.java + base.apk"
+          echo "[2/7] aapt2 compile 资源"
+          "$BT/aapt2" compile --dir "$OUT/res" -o "$OUT/res-compiled/res.zip"
+
+          echo "[3/7] aapt2 link 生成 R.java + base.apk"
           "$BT/aapt2" link -o "$OUT/base.apk" -I "$AJAR" \
             --manifest AndroidManifest.xml \
             --java "$OUT/gen" \
             --min-sdk-version 26 --target-sdk-version 34 \
             --version-code 1 --version-name "1.0" \
-            "$OUT/res/values/strings.xml" "$OUT/res/values/styles.xml"
+            --auto-add-overlay \
+            "$OUT/res-compiled/res.zip"
 
-          echo "[3/6] javac 编译"
+          echo "[4/7] javac 编译 Java"
           find src "$OUT/gen" -name "*.java" > "$OUT/sources.txt"
           javac -source 11 -target 11 -nowarn -encoding UTF-8 \
             -bootclasspath "$AJAR" -classpath "$AJAR" \
             -d "$OUT/classes" @"$OUT/sources.txt"
 
-          echo "[4/6] d8 打包 dex"
+          echo "[5/7] d8 打包 dex"
           "$BT/d8" --lib "$AJAR" --min-api 26 --output "$OUT" \
             $(find "$OUT/classes" -name "*.class")
 
-          echo "[5/6] 合并 APK"
+          echo "[6/7] 合并 classes.dex 进 APK"
           cp "$OUT/base.apk" "$OUT/unsigned.apk"
           (cd "$OUT" && zip -j unsigned.apk classes.dex)
 
-          echo "[6/6] zipalign + 签名"
+          echo "[7/7] zipalign + 签名"
           "$BT/zipalign" -f 4 "$OUT/unsigned.apk" PaperMarker-Bridge.apk
           "$BT/apksigner" sign \
             --ks papermarker.keystore \
@@ -122,29 +119,35 @@ jobs:
           path: android-bridge/PaperMarker-Bridge.apk
           retention-days: 90
 
-      - name: Upload to Release (on main push)
+      - name: Upload to GitHub Release
         if: github.ref == 'refs/heads/main'
         run: |
           # 获取最新 release
           LATEST=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/latest" 2>/dev/null || echo "")
-          RELEASE_ID=$(echo "$LATEST" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('id',''))" 2>/dev/null || echo "")
+            "https://api.github.com/repos/${{ github.repository }}/releases/latest")
+          RELEASE_ID=$(echo "$LATEST" | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
           if [ -z "$RELEASE_ID" ]; then
-            echo "No release found, skipping upload"
-            exit 0
+            echo "No release found, creating one"
+            RESP=$(curl -s -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Content-Type: application/json" \
+              -d '{"tag_name":"v1.9.5-bridge","name":"PaperMarker Bridge APK","body":"Android 桥接应用 APK","draft":false,"prerelease":false}' \
+              "https://api.github.com/repos/${{ github.repository }}/releases")
+            RELEASE_ID=$(echo "$RESP" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
           fi
-          echo "Uploading to release $RELEASE_ID"
-          # 删除旧 asset
+          echo "Release ID: $RELEASE_ID"
+          # 删除旧的 Bridge APK
           ASSETS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             "https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets")
           for id in $(echo "$ASSETS" | python3 -c "import sys,json;d=json.load(sys.stdin);[print(a['id']) for a in d if a['name']=='PaperMarker-Bridge.apk']" 2>/dev/null); do
             curl -s -X DELETE -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
               "https://api.github.com/repos/${{ github.repository }}/releases/assets/$id"
+            echo "Deleted old asset $id"
           done
-          # 上传新 asset
+          # 上传新 APK
           curl -s -X POST \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Content-Type: application/vnd.android.package-archive" \
             --data-binary @android-bridge/PaperMarker-Bridge.apk \
             "https://uploads.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets?name=PaperMarker-Bridge.apk"
+          echo ""
           echo "Upload complete"

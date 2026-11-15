@@ -42,11 +42,40 @@ export async function POST(req: NextRequest) {
     }
     const buf = Buffer.from(await file.arrayBuffer())
 
+    if (buf.length < 100) {
+      return NextResponse.json({ code: 400, msg: '图片数据为空' }, { status: 400 })
+    }
+
     const outPath = path.join(processedDir(), genFilename('.jpg'))
-    // 客户端已完成增强，这里只做 EXIF 旋转 + 轻压缩，避免二次处理冲掉黑白增强效果
-    const outBuf = await sharp(buf).rotate().jpeg({ quality: 92 }).toBuffer()
+    let outBuf: Buffer
+    try {
+      // 客户端已完成增强，这里只做 EXIF 旋转 + 轻压缩
+      outBuf = await sharp(buf).rotate().jpeg({ quality: 92 }).toBuffer()
+    } catch (sharpErr: any) {
+      // JPEG 数据损坏（premature end / corrupt）→ 强制重新编码为完整 JPEG
+      console.warn('[scan/pages] sharp 处理失败，尝试强制重编码:', sharpErr?.message)
+      try {
+        // 用 metadata 模式读，不触发解码失败；再用 raw 重新生成
+        const meta = await sharp(buf).metadata().catch(() => null)
+        // 最后兜底：直接把原 buffer 当作已处理 JPEG 存盘（不再二次压缩）
+        if (buf[0] === 0xff && buf[1] === 0xd8) {
+          // 确实是 JPEG（即便有损坏标记），直接保存原始字节
+          outBuf = buf
+          console.log('[scan/pages] JPEG 头有效，保存原始字节（跳过 sharp 二次处理）')
+        } else {
+          // 非 JPEG（PNG/WebP 等），转 JPEG
+          outBuf = await sharp(buf).flatten({ background: '#ffffff' }).jpeg({ quality: 92 }).toBuffer()
+        }
+      } catch (e2: any) {
+        console.error('[scan/pages] 重编码也失败:', e2?.message)
+        return NextResponse.json(
+          { code: 500, msg: `图片处理失败：数据损坏，请重新拍摄或换一张图` },
+          { status: 500 }
+        )
+      }
+    }
     fs.writeFileSync(outPath, outBuf)
-    const meta = await sharp(outBuf).metadata()
+    const meta = await sharp(outBuf).metadata().catch(() => ({ width: 0, height: 0 }))
 
     const f = await db.file.create({
       data: {

@@ -277,6 +277,10 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
       }
       setWebPages(r.pages)
       setWebPrint(sub)
+      toast({
+        title: `已渲染 ${r.pages.length} 页`,
+        description: '预览页面已打开，点击「打印」按钮执行系统打印',
+      })
     } catch (e: any) {
       toast({ title: '渲染打印页失败', description: e.message, variant: 'destructive' })
     } finally {

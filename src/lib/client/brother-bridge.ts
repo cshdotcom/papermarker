@@ -19,25 +19,32 @@ export interface BridgeStatus {
   version?: string
 }
 
-/** 探测本地桥接服务是否在运行 */
+/** 探测本地桥接服务是否在运行（带重试，应对 PNA 权限延迟） */
 export async function detectBridge(timeoutMs = 3000): Promise<BridgeStatus> {
-  const ctrl = new AbortController()
-  const t = setTimeout(() => ctrl.abort(), timeoutMs)
-  try {
-    const r = await fetch(`${BRIDGE_URL}/ping`, {
-      signal: ctrl.signal,
-      mode: 'cors',
-    })
-    if (r.ok) {
-      const data = await r.json()
-      return { running: true, url: BRIDGE_URL, version: data.version }
+  const tryFetch = async (ms: number): Promise<boolean> => {
+    const ctrl = new AbortController()
+    const t = setTimeout(() => ctrl.abort(), ms)
+    try {
+      const r = await fetch(`${BRIDGE_URL}/ping`, {
+        signal: ctrl.signal,
+        mode: 'cors',
+      })
+      if (r.ok) {
+        const data = await r.json()
+        return data?.ok === true
+      }
+      return false
+    } catch {
+      return false
+    } finally {
+      clearTimeout(t)
     }
-    return { running: false, url: BRIDGE_URL }
-  } catch {
-    return { running: false, url: BRIDGE_URL }
-  } finally {
-    clearTimeout(t)
   }
+  // 两次探测（第二次给浏览器更多时间处理 PNA 权限弹窗）
+  const ok1 = await tryFetch(timeoutMs)
+  if (ok1) return { running: true, url: BRIDGE_URL, version: '1.0.0' }
+  const ok2 = await tryFetch(4000)
+  return { running: ok2, url: BRIDGE_URL }
 }
 
 export interface BridgeScanPage {

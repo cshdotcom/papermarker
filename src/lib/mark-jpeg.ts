@@ -189,13 +189,41 @@ export async function renderAnnotatedJpegs(
   for (const pageNo of pageNos) {
     const pg = pageImages.get(pageNo)
     if (!pg || !fs.existsSync(pg.path)) continue
-    const img = sharp(pg.path)
-    const meta = await img.metadata()
+    let img = sharp(pg.path)
+    let meta = await img.metadata().catch(() => null)
+    // 源图损坏时兜底：用空 canvas 占位，避免整个渲染崩溃
+    if (!meta || !meta.width) {
+      console.warn(`[mark-jpeg] 源图 ${pg.path} 元数据读取失败，使用占位图`)
+      meta = { width: pg.w || 1000, height: pg.h || 1414 } as any
+      img = sharp({
+        create: {
+          width: meta.width!,
+          height: meta.height!,
+          channels: 3,
+          background: { r: 245, g: 245, b: 245 },
+        },
+      })
+    }
     const iw = meta.width || pg.w || 1000
     const ih = meta.height || pg.h || 1414
     const outH = Math.round((outW * ih) / iw)
-    // 先统一缩放底图
-    const base = await img.resize(outW, outH, { fit: 'fill' }).toBuffer()
+    // 先统一缩放底图（resize 比 toBuffer 更宽容）
+    let base: Buffer
+    try {
+      base = await img.resize(outW, outH, { fit: 'fill' }).toBuffer()
+    } catch (e: any) {
+      console.warn(`[mark-jpeg] 底图 resize 失败: ${e?.message}，使用占位底图`)
+      base = await sharp({
+        create: {
+          width: outW,
+          height: outH,
+          channels: 3,
+          background: { r: 245, g: 245, b: 245 },
+        },
+      })
+        .jpeg()
+        .toBuffer()
+    }
 
     const list = annotations.filter((a) => (a.pageNo || 1) === pageNo)
     let pageGetSum = 0

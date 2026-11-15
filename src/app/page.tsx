@@ -16,6 +16,7 @@ import { Review } from '@/components/pm/review'
 import { Settings } from '@/components/pm/settings'
 import { ScanView } from '@/components/pm/scan/scan-view'
 import { LoginView } from '@/components/pm/login-view'
+import { PwaInstallBanner, LocalNetworkPermissionGuide } from '@/components/pm/pwa-install'
 import { Button } from '@/components/ui/button'
 
 /**
@@ -249,6 +250,10 @@ export default function Home() {
           })}
         </div>
       </nav>
+
+      {/* PWA 安装引导 + 局域网权限引导 */}
+      <PwaInstallBanner />
+      <LocalNetworkPermissionGuide />
     </div>
   )
 }

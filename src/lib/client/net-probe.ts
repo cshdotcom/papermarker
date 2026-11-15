@@ -42,6 +42,7 @@ export async function clientProbeUrl(url: string, timeoutMs = 4000): Promise<Pro
 
   try {
     // no-cors：即使打印机不返回 CORS 头，TCP 能连上就 resolve（opaque）
+    // targetAddressSpace: 'private' 告诉 Chrome 这是局域网请求（缓解 PNA 拦截）
     await fetch(url, {
       method: 'GET',
       mode: 'no-cors',
@@ -49,7 +50,9 @@ export async function clientProbeUrl(url: string, timeoutMs = 4000): Promise<Pro
       signal: ctrl.signal,
       // no-cors 模式下 redirect 必须为 follow，否则浏览器报 CORS 错误
       redirect: 'follow',
-    })
+      // @ts-ignore targetAddressSpace 是 Chrome 实验属性，声明为局域网请求
+      targetAddressSpace: 'private',
+    } as RequestInit)
     clearTimeout(timer)
     const elapsed = Date.now() - t0
     return {

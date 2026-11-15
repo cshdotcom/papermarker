@@ -47,7 +47,13 @@ async function fetchTimeout(url: string, init: RequestInit, ms: number): Promise
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), ms)
   try {
-    return await fetch(url, { ...init, signal: ctrl.signal })
+    // targetAddressSpace: 'private' 声明为局域网请求，缓解 Chrome PNA 拦截
+    return await fetch(url, {
+      ...init,
+      signal: ctrl.signal,
+      // @ts-ignore Chrome 实验属性
+      targetAddressSpace: 'private',
+    } as RequestInit)
   } finally {
     clearTimeout(t)
   }

@@ -1037,11 +1037,20 @@ export function Settings() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2 text-xs text-muted-foreground">
-          <p><strong>1. 同一局域网：</strong>本服务与打印/扫描一体机需在同一 WiFi / 路由器下。</p>
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-3">
+            <p className="font-semibold text-emerald-800">安装为应用（推荐）</p>
+            <p className="mt-1 leading-relaxed text-emerald-700">
+              浏览器地址栏右侧「安装」图标 → 添加到桌面 / 主屏幕。安装后作为独立应用运行，
+              Chrome 允许直接访问局域网设备（192.168.x.x），不受 Private Network Access 限制。
+              首次访问时弹窗点「允许」即可。
+            </p>
+          </div>
+          <p><strong>1. 同一局域网：</strong>本设备（手机/电脑）与打印/扫描一体机需在同一 WiFi / 路由器下。</p>
           <p><strong>2. IPP 模式：</strong>适用于佳能 / 惠普 / 兄弟海外版等支持 IPP 的机型，地址一般为 <code className="rounded bg-muted px-1">http://IP:631/ipp/print</code>。</p>
           <p><strong>3. Brother 直连模式：</strong>国行 DCP-T428W 等无私有驱动协议的机型。打印走 9100 端口（JPEG 直发），扫描走 54921 私有协议（原厂 SDK 逆向，真机已验证）。</p>
           <p><strong>4. 扫描独占：</strong>Brother 扫描会话独占，扫描前请退出手机 iPrint&amp;Scan APP，否则握手会拿到 -NG。</p>
           <p><strong>5. 兜底方案：</strong>直连/IPP 失败时自动返回 PDF，前端调用浏览器原生打印。</p>
+          <p><strong>6. 浏览器限制：</strong>Brother 54921 裸 TCP 协议浏览器无法直连，需用 Android 客户端（原生 TCP）。eSCL 扫描需打印机支持 CORS。</p>
         </CardContent>
       </Card>
     </div>

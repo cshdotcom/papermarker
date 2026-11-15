@@ -255,6 +255,31 @@ export function ScanView() {
               />
             ) : (
               <div className="space-y-3">
+                {/* 云端部署提示：服务器无法访问局域网扫描仪 */}
+                <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                    <div className="space-y-1">
+                      <p className="font-semibold text-amber-800">网络扫描需自托管</p>
+                      <p className="leading-relaxed text-amber-700">
+                        当前应用部署在云端，服务器无法连接你局域网内的扫描仪/打印机一体机。
+                        网络扫描功能仅在<b>应用自托管</b>（服务器与打印机同一局域网）时可用。
+                      </p>
+                      <p className="leading-relaxed text-amber-700">
+                        云端环境下请使用<b>手机相机拍照</b>采集试卷 —— 功能完全等价，无需局域网。
+                      </p>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="mt-1 h-7 border-amber-400 text-amber-700 hover:bg-amber-100"
+                        onClick={() => setMode('camera')}
+                      >
+                        <Camera className="mr-1 h-3.5 w-3.5" />
+                        切换到手机相机
+                      </Button>
+                    </div>
+                  </div>
+                </div>
                 {scannerCfg ? (
                   <>
                     <div className="grid grid-cols-3 gap-2">

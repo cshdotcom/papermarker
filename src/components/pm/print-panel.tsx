@@ -20,7 +20,8 @@ import {
   ArrowRight,
   AlertCircle,
 } from 'lucide-react'
-import { api, fileUrl, type TaskDetail, type MarkLayers } from '@/lib/pm'
+import { api, fileUrl, type TaskDetail, type MarkLayers, type PrinterConfig } from '@/lib/pm'
+import { detectBridge, bridgePrint } from '@/lib/client/brother-bridge'
 import { usePm } from '@/lib/pm-store'
 import { useToast } from '@/hooks/use-toast'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -86,11 +87,11 @@ const METHOD_OPTIONS: {
   },
   {
     key: 'brother',
-    label: 'Brother 9100 直连',
-    desc: 'PJL + JPEG → 打印机 9100 端口',
+    label: 'Brother 桥接打印',
+    desc: '浏览器 → localhost 桥接 → 打印机 9100',
     icon: Wifi,
-    hint: 'Brother DCP-T428W 喷墨机专用，需服务器与打印机同局域网',
-    warning: '当前服务器在云端，无法访问局域网打印机。仅当应用自托管（服务器与打印机同网）时可用。',
+    hint: 'Brother DCP-T428W 喷墨机专用，需本电脑运行桥接服务',
+    warning: '需先下载并运行 papermarker-bridge.exe（扫描页有下载链接）。桥接运行后浏览器经 localhost 直连打印机 9100，不经服务器。',
   },
 ]
 
@@ -174,8 +175,8 @@ function PrintFlowDiagram({ method }: { method: PrintMethod }) {
         ]
       : [
           { icon: Smartphone, label: '本设备', sub: '网页端' },
-          { icon: Wifi, label: 'PJL+JPEG', sub: '9100 端口' },
-          { icon: Printer, label: 'Brother 打印机', sub: 'DCP-T428W' },
+          { icon: Wifi, label: '本地桥接', sub: 'localhost:3790' },
+          { icon: Printer, label: 'Brother 打印机', sub: 'TCP 9100' },
         ]
   return (
     <div className="flex items-center justify-between gap-1 rounded-lg border bg-muted/30 p-3">
@@ -211,8 +212,14 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [chosenContent, setChosenContent] = useState<SubType>('mark')
   const [chosenMethod, setChosenMethod] = useState<PrintMethod>('browser')
+  const [printerCfg, setPrinterCfg] = useState<PrinterConfig | null>(null)
   const { layers, toggleLayer } = usePm()
   const { toast } = useToast()
+
+  // 加载打印机配置（判断 Brother host + mode）
+  useEffect(() => {
+    api.getPrinter().then((r) => setPrinterCfg(r.config)).catch(() => {})
+  }, [])
 
   const fileIds: Record<SubType, string | undefined> = {
     mark: task.markPdfFileId,
@@ -300,13 +307,73 @@ export function PrintPanel({ task }: { task: TaskDetail }) {
     }
   }
 
+  /** Brother 桥接直连打印：浏览器 → localhost:3790 → TCP 9100（不经服务器） */
+  const doBridgePrint = async (sub: SubType) => {
+    setBusy(sub)
+    try {
+      const host = printerCfg?.host
+      if (!host) {
+        toast({ title: '请先在设置中配置 Brother 打印机 IP', variant: 'destructive' })
+        return
+      }
+      // 探测桥接是否运行
+      const bridge = await detectBridge()
+      if (!bridge.running) {
+        toast({
+          title: '本地桥接未运行',
+          description: '请下载并运行 papermarker-bridge.exe（扫描页有下载链接），或改用浏览器打印',
+          variant: 'destructive',
+        })
+        return
+      }
+      // 获取渲染后的批注页 JPEG（dataUrl）
+      const withImage = sub === 'mark' || sub === 'marks'
+      const subForRender = sub === 'answer' || sub === 'parse' ? 'mark' : sub
+      const r = await api.printPages(task.id, withImage, layers)
+      if (!r.pages || r.pages.length === 0) {
+        toast({ title: '没有可打印的页面', variant: 'destructive' })
+        return
+      }
+      // dataUrl → base64（去掉 data:image/jpeg;base64, 前缀）
+      const jpegs = r.pages.map((p) => p.dataUrl.split(',')[1])
+      // 按份数复制
+      const allJpegs: string[] = []
+      for (let i = 0; i < copies; i++) allJpegs.push(...jpegs)
+
+      const result = await bridgePrint(host, allJpegs, `PaperMarker-${subForRender}`)
+      if (result.ok) {
+        toast({ title: `${SUB_LABEL[sub]} 桥接打印成功`, description: result.msg })
+      } else {
+        toast({
+          title: '桥接打印失败',
+          description: result.msg,
+          variant: 'destructive',
+        })
+      }
+    } catch (e: any) {
+      toast({ title: '桥接打印异常', description: e.message, variant: 'destructive' })
+    } finally {
+      setBusy(null)
+    }
+  }
+
   /** 确认打印：按所选方式分发 */
   const confirmPrint = async () => {
     setDialogOpen(false)
     if (chosenMethod === 'browser') {
       // 浏览器打印只支持 mark / marks
       await doBrowserPrint(chosenContent === 'answer' || chosenContent === 'parse' ? 'mark' : chosenContent)
+    } else if (chosenMethod === 'brother') {
+      // Brother 直连：优先走本地桥接（不经服务器），桥接不可用时降级服务器
+      const bridge = await detectBridge()
+      if (bridge.running && printerCfg?.host) {
+        await doBridgePrint(chosenContent)
+      } else {
+        // 桥接未运行 → 降级服务器（仅自托管可用）
+        await doDirectPrint(chosenContent)
+      }
     } else {
+      // IPP：只能走服务器（需自托管）
       await doDirectPrint(chosenContent)
     }
   }

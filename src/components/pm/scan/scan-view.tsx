@@ -18,7 +18,7 @@ import {
 } from 'lucide-react'
 import { api, fileUrl, type ScannerConfig, type TrayPage } from '@/lib/pm'
 import { clientEsclScan } from '@/lib/client/escl-scan'
-import { detectBridge, bridgeScan, base64ToBlob } from '@/lib/client/brother-bridge'
+import { detectBridge, bridgeScan, bridgePrint, base64ToBlob } from '@/lib/client/brother-bridge'
 import { usePm } from '@/lib/pm-store'
 import { useToast } from '@/hooks/use-toast'
 import { useIsMobile } from '@/hooks/use-mobile'
@@ -263,7 +263,9 @@ export function ScanView() {
     }
   }
 
-  // 快速复印：托盘页面下发打印机（IPP / Brother 9100 直连）
+  // 快速复印：托盘页面下发打印机
+  // Brother 模式：浏览器 → localhost 桥接 → TCP 9100（不经服务器）
+  // eSCL/IPP 模式：走服务器（仅自托管可用）
   const doCopy = async () => {
     if (pages.length === 0) {
       toast({ title: '托盘没有页面，请先扫描或拍照', variant: 'destructive' })
@@ -271,13 +273,55 @@ export function ScanView() {
     }
     setCopying(true)
     try {
+      // Brother 模式：优先走本地桥接
+      if (scannerCfg?.protocol === 'brother' && scannerCfg.host) {
+        const bridge = await detectBridge()
+        if (bridge.running) {
+          // 托盘页面 → 获取 JPEG → base64 → 桥接打印
+          const jpegs: string[] = []
+          for (const p of pages) {
+            try {
+              const resp = await fetch(fileUrl(p.id))
+              const blob = await resp.blob()
+              const base64 = await new Promise<string>((resolve) => {
+                const reader = new FileReader()
+                reader.onloadend = () => resolve(reader.result as string)
+                reader.readAsDataURL(blob)
+              })
+              jpegs.push(base64.split(',')[1])
+            } catch (e: any) {
+              toast({ title: '获取托盘页失败', description: e.message, variant: 'destructive' })
+            }
+          }
+          if (jpegs.length === 0) {
+            toast({ title: '无可打印页面', variant: 'destructive' })
+            return
+          }
+          const result = await bridgePrint(scannerCfg.host, jpegs, 'PaperMarker-Copy')
+          if (result.ok) {
+            toast({ title: '复印已下发（经本地桥接）', description: result.msg })
+          } else {
+            toast({ title: '桥接复印失败', description: result.msg, variant: 'destructive' })
+          }
+          return
+        } else {
+          toast({
+            title: '本地桥接未运行',
+            description: '请下载并运行 papermarker-bridge.exe，或改用服务器复印（需自托管）',
+            variant: 'destructive',
+          })
+          return
+        }
+      }
+
+      // 非 Brother 模式：走服务器
       const r = await api.copyPrint({
         fileIds: pages.map((p) => p.id),
         duplex: copyDuplex,
       })
       if (r?.code === 500 && (r as any).fallbackPdfFileId) {
         toast({
-          title: 'IPP 打印失败，已切换浏览器打印',
+          title: '打印失败，已切换浏览器打印',
           description: (r as any).msg,
           variant: 'destructive',
         })
@@ -633,7 +677,9 @@ export function ScanView() {
               </Button>
             </div>
             <p className="text-[11px] text-muted-foreground">
-              复印 = 托盘页面下发打印机（IPP 631 或 Brother 9100 直连）；失败自动降级浏览器打印
+              {scannerCfg?.protocol === 'brother'
+                ? '复印 = 托盘页面经本地桥接下发 Brother 打印机 9100；需运行桥接服务'
+                : '复印 = 托盘页面下发打印机（IPP 631，需自托管）；失败自动降级浏览器打印'}
             </p>
           </CardContent>
         </Card>
